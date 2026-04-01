@@ -41,7 +41,9 @@ export async function createServer() {
   return app;
 }
 
-if (process.env.NODE_ENV !== "production" && fileURLToPath(import.meta.url) === process.argv[1]) {
+const isMainModule = fileURLToPath(import.meta.url) === process.argv[1] || process.argv[1]?.endsWith('server.ts');
+
+if (isMainModule) {
   createServer().then(app => {
     const PORT = 3000;
     app.listen(PORT, "0.0.0.0", () => {
@@ -49,4 +51,5 @@ if (process.env.NODE_ENV !== "production" && fileURLToPath(import.meta.url) === 
     });
   });
 }
+
 
