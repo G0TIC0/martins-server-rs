@@ -239,7 +239,7 @@ export const QuoteDetail: React.FC = () => {
       }
       
       // Generate PDF after saving
-      generatePDF();
+      await generatePDF();
       
       alert('Orçamento salvo e PDF gerado com sucesso!');
     } catch (error) {
