@@ -1,0 +1,201 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Fields: uid, email, displayName, photoURL, role, createdAt
+    //
+    // Collection: customers
+    // Fields: id, name, document, email, phone, address, observations, createdBy, createdAt
+    //
+    // Collection: items
+    // Fields: id, name, description, type, basePrice, unit, active, ncm, ncmDescription, fci, partCodes, observations, createdAt, updatedAt
+    //
+    // Collection: vehicles
+    // Fields: id, customerId, plate, brand, model, year, color, vin, observations, createdAt, updatedAt
+    //
+    // Collection: quotes
+    // Fields: id, quoteNumber, title, customerId, customerName, vehicleId, vehiclePlate, vehicleModel, currentKm, status, serviceStatus, items, subtotal, discountTotal, taxTotal, shippingFee, urgencyFee, grandTotal, validUntil, notes, terms, createdBy, createdAt, updatedAt, approvedAt, approvedBy
+    //
+    // Collection: audit_logs
+    // Fields: id, userId, userName, action, entityType, entityId, details, timestamp
+    //
+    // Collection: settings
+    // Fields: name, logoUrl, website, email, phone, address
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (request.auth.token.email == "mig7mor@gmail.com" ||
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'));
+    }
+
+    function isManager() {
+      return isAuthenticated() &&
+        (isAdmin() || 
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'manager'));
+    }
+
+    function isSales() {
+      return isAuthenticated() &&
+        (isManager() || 
+         request.auth.token.email == "mig7mor@gmail.com" ||
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'sales'));
+    }
+
+    function isTechnician() {
+      return isAuthenticated() &&
+        (isManager() || 
+         request.auth.token.email == "mig7mor@gmail.com" ||
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'technician'));
+    }
+
+    function isCustomer() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'customer';
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['uid', 'email', 'displayName', 'photoURL', 'role', 'cpf', 'phone', 'createdAt']) &&
+             data.uid is string && data.email is string && isValidEmail(data.email) &&
+             data.role in ['admin', 'manager', 'sales', 'finance', 'technician', 'customer'];
+    }
+
+    function isValidCustomer(data) {
+      return hasOnlyAllowedFields(['id', 'name', 'document', 'email', 'phone', 'address', 'observations', 'createdBy', 'createdAt', 'updatedAt']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.document is string &&
+             (!('email' in data) || data.email == "" || (data.email is string && isValidEmail(data.email))) &&
+             (!('phone' in data) || (data.phone is string));
+    }
+
+    function isValidItem(data) {
+      return hasOnlyAllowedFields(['id', 'name', 'description', 'type', 'basePrice', 'costPrice', 'unit', 'active', 'ncm', 'ncmDescription', 'fci', 'partCodes', 'observations', 'createdAt', 'updatedAt']) &&
+             data.name is string && data.basePrice is number && data.type in ['service', 'product', 'package', 'labor'];
+    }
+
+    function isValidVehicle(data) {
+      return hasOnlyAllowedFields(['id', 'customerId', 'plate', 'brand', 'model', 'year', 'color', 'vin', 'observations', 'createdAt', 'updatedAt']) &&
+             data.customerId is string && data.plate is string && data.brand is string && data.model is string;
+    }
+
+    function isValidQuote(data) {
+      // Temporarily removing hasOnlyAllowedFields to debug if any extra fields are causing issues
+      return data.customerId is string && 
+             data.status in ['received', 'analyzing', 'negotiating', 'awaiting_approval', 'executing', 'finished'] &&
+             (!('serviceStatus' in data) || data.serviceStatus in ['waiting', 'in_progress', 'testing', 'ready', 'delivered']) &&
+             (!('grandTotal' in data) || data.grandTotal is number) &&
+             (!('classification' in data) || data.classification is string);
+    }
+
+    function isValidAuditLog(data) {
+      return hasOnlyAllowedFields(['id', 'userId', 'userName', 'action', 'entityType', 'entityId', 'details', 'timestamp']) &&
+             data.userId is string && data.action is string;
+    }
+
+    function isValidCompanySettings(data) {
+      return hasOnlyAllowedFields(['id', 'name', 'logoUrl', 'website', 'email', 'phone', 'address', 'updatedAt']) &&
+             data.name is string && data.name.size() > 0;
+    }
+
+    function isValidNcm(data) {
+      return hasOnlyAllowedFields(['code', 'description', 'updatedAt']) &&
+             data.code is string && data.description is string;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{uid} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(uid) && request.resource.data.role != 'admin' || isAdmin());
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(uid) && request.resource.data.role == resource.data.role || isAdmin());
+    }
+
+    match /customers/{customerId} {
+      allow read: if isAuthenticated();
+      allow create: if isSales() && isValidCustomer(request.resource.data);
+      allow update: if isSales() && isValidCustomer(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /items/{itemId} {
+      allow read: if isAuthenticated();
+      allow create: if isManager() && isValidItem(request.resource.data);
+      allow update: if isManager() && isValidItem(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /vehicles/{vehicleId} {
+      allow read: if isAuthenticated();
+      allow create: if isSales() && isValidVehicle(request.resource.data);
+      allow update: if isSales() && isValidVehicle(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /quotes/{quoteId} {
+      allow read: if isAuthenticated() && (isSales() || (isCustomer() && request.auth.uid == resource.data.customerId));
+      allow create: if isSales() && isValidQuote(request.resource.data);
+      allow update: if (isSales() && isValidQuote(request.resource.data)) || 
+                     (isTechnician() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'timeline', 'serviceStatus', 'updatedAt']) && isValidQuote(request.resource.data));
+      allow delete: if isAdmin();
+    }
+
+    match /audit_logs/{logId} {
+      allow read: if isManager();
+      allow create: if isAuthenticated() && isValidAuditLog(request.resource.data);
+    }
+
+    match /settings/{settingId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() && isValidCompanySettings(request.resource.data);
+    }
+
+    match /ncms/{ncmId} {
+      allow read: if isAuthenticated();
+      allow write: if isManager() && isValidNcm(request.resource.data);
+    }
+
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}

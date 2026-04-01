@@ -1,0 +1,283 @@
+import React, { useEffect, useState } from 'react';
+import { collection, query, getDocs, orderBy, deleteDoc, doc, where, addDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebase';
+import { Quote, QuoteStatus } from '../types';
+import { useFirebase } from '../context/FirebaseContext';
+import { Plus, Search, Eye, Trash2, FileText, Clock, CheckCircle, AlertCircle, X, TrendingUp, Users, ArrowUpRight, Copy, Mail, Edit2 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { cn, formatCurrency, formatDateTime, generateQuoteNumber } from '../lib/utils';
+import { useNavigate } from 'react-router-dom';
+
+export const Quotes: React.FC = () => {
+  const navigate = useNavigate();
+  const { isAdmin, isSales, isCustomer, profile } = useFirebase();
+  const [quotes, setQuotes] = useState<Quote[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<QuoteStatus | 'all'>('all');
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchQuotes();
+  }, []);
+
+  const fetchQuotes = async () => {
+    try {
+      let q;
+      if (isCustomer && profile) {
+        q = query(
+          collection(db, 'quotes'), 
+          where('customerId', '==', profile.uid),
+          orderBy('createdAt', 'desc')
+        );
+      } else {
+        q = query(collection(db, 'quotes'), orderBy('createdAt', 'desc'));
+      }
+      const snapshot = await getDocs(q);
+      const data = snapshot.docs.map(doc => {
+        const docData = doc.data();
+        return { id: doc.id, ...(docData as any) } as Quote;
+      });
+      setQuotes(data);
+    } catch (error) {
+      console.error('Error fetching quotes:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDelete = (id: string) => {
+    setDeleteConfirmId(id);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteConfirmId) return;
+    try {
+      await deleteDoc(doc(db, 'quotes', deleteConfirmId));
+      fetchQuotes();
+    } catch (error) {
+      console.error('Error deleting quote:', error);
+    } finally {
+      setDeleteConfirmId(null);
+    }
+  };
+
+  const handleDuplicate = async (quote: Quote) => {
+    try {
+      const { id, createdAt, updatedAt, ...rest } = quote;
+      const newQuote = {
+        ...rest,
+        quoteNumber: generateQuoteNumber(),
+        status: 'draft',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+      await addDoc(collection(db, 'quotes'), newQuote);
+      fetchQuotes();
+      alert('Orçamento duplicado com sucesso!');
+    } catch (error) {
+      console.error('Error duplicating quote:', error);
+    }
+  };
+
+  const handleGenerateEmail = (quote: Quote) => {
+    const subject = encodeURIComponent(`Orçamento ${quote.quoteNumber}`);
+    const body = encodeURIComponent(`Olá ${quote.customerName},\n\nSegue em anexo o orçamento solicitado.\n\nNúmero: ${quote.quoteNumber}\nTotal: ${formatCurrency(quote.grandTotal)}\n\nAtenciosamente,\nEquipe Comercial`);
+    const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=&su=${subject}&body=${body}`;
+    window.open(gmailUrl, '_blank');
+  };
+
+  const filteredQuotes = quotes.filter(q => {
+    const matchesSearch = q.quoteNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          q.customerName.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesStatus = statusFilter === 'all' || q.status === statusFilter;
+    return matchesSearch && matchesStatus;
+  });
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-1 items-center gap-4">
+          <div className="relative w-full max-w-md">
+            <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-[#9CA3AF]" />
+            <input
+              type="text"
+              placeholder="Buscar por número ou cliente..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="h-11 w-full rounded-xl border border-[#E5E7EB] bg-white pl-10 pr-4 text-sm shadow-sm focus:border-[#111827] focus:outline-none focus:ring-1 focus:ring-[#111827]"
+            />
+          </div>
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as any)}
+            className="h-11 rounded-xl border border-[#E5E7EB] bg-white px-4 text-sm shadow-sm focus:border-[#111827] focus:outline-none"
+          >
+            <option value="all">Todos os Status</option>
+            <option value="received">Recebido</option>
+            <option value="analyzing">Em Análise</option>
+            <option value="negotiating">Em Tratativa</option>
+            <option value="awaiting_approval">Aguardando Aprovação</option>
+            <option value="executing">Execução</option>
+            <option value="finished">Finalizado</option>
+          </select>
+        </div>
+        {!isCustomer && isSales && (
+          <button
+            onClick={() => navigate('/quotes/new')}
+            className="flex items-center gap-2 rounded-xl bg-[#111827] px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[#111827]/20 transition-all hover:bg-black hover:shadow-xl active:scale-95"
+          >
+            <Plus className="h-5 w-5" />
+            Novo Orçamento
+          </button>
+        )}
+      </div>
+
+      <div className="rounded-2xl border border-[#E5E7EB] bg-white shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead>
+              <tr className="border-b border-[#F3F4F6] bg-[#F9FAFB] text-xs font-semibold uppercase tracking-wider text-[#9CA3AF]">
+                <th className="px-6 py-4">Número</th>
+                <th className="px-6 py-4">Cliente</th>
+                <th className="px-6 py-4">Data de Criação</th>
+                <th className="px-6 py-4">Total</th>
+                <th className="px-6 py-4">Status</th>
+                <th className="px-6 py-4 text-right">Ações</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#F3F4F6]">
+              {filteredQuotes.map((quote) => (
+                <tr key={quote.id} className="group hover:bg-[#F9FAFB] transition-colors">
+                  <td className="px-6 py-4">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-martins-blue text-[#111827]">
+                        <FileText className="h-4 w-4" />
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="font-bold text-[#111827]">{quote.quoteNumber}</span>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 text-[#4B5563]">{quote.customerName}</td>
+                  <td className="px-6 py-4 text-sm text-[#6B7280]">{formatDateTime(quote.createdAt)}</td>
+                  <td className="px-6 py-4 font-bold text-[#111827]">{formatCurrency(quote.grandTotal)}</td>
+                  <td className="px-6 py-4">
+                    <StatusBadge status={quote.status} />
+                  </td>
+                  <td className="px-6 py-4 text-right">
+                    <div className="flex justify-end gap-2">
+                      <button
+                        onClick={() => navigate(`/quotes/${quote.id}`)}
+                        title={isCustomer ? "Visualizar" : "Editar"}
+                        className="rounded-lg p-2 text-[#6B7280] hover:bg-[#F3F4F6] hover:text-[#111827]"
+                      >
+                        {isCustomer ? <Eye className="h-4 w-4" /> : <Edit2 className="h-4 w-4" />}
+                      </button>
+                      {!isCustomer && (
+                        <>
+                          <button
+                            onClick={() => handleDuplicate(quote)}
+                            title="Duplicar"
+                            className="rounded-lg p-2 text-[#6B7280] hover:bg-[#F3F4F6] hover:text-[#111827]"
+                          >
+                            <Copy className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => handleGenerateEmail(quote)}
+                            title="Gerar E-mail"
+                            className="rounded-lg p-2 text-[#6B7280] hover:bg-[#F3F4F6] hover:text-[#111827]"
+                          >
+                            <Mail className="h-4 w-4" />
+                          </button>
+                        </>
+                      )}
+                      {isAdmin && (
+                        <button
+                          onClick={() => handleDelete(quote.id)}
+                          title="Excluir"
+                          className="rounded-lg p-2 text-[#6B7280] hover:bg-[#FEF2F2] hover:text-[#EF4444]"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {filteredQuotes.length === 0 && !loading && (
+                <tr>
+                  <td colSpan={6} className="py-12 text-center text-[#9CA3AF]">Nenhum orçamento encontrado.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {/* Delete Confirmation Modal */}
+      <AnimatePresence>
+        {deleteConfirmId && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-md rounded-2xl bg-white p-8 shadow-2xl"
+            >
+              <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-[#FEF2F2] text-[#EF4444]">
+                <Trash2 className="h-8 w-8" />
+              </div>
+              <h2 className="mb-2 text-xl font-bold text-[#111827]">Excluir Orçamento</h2>
+              <p className="mb-8 text-[#6B7280]">
+                Tem certeza que deseja excluir este orçamento? Esta ação não pode ser desfeita.
+              </p>
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setDeleteConfirmId(null)}
+                  className="rounded-xl px-6 py-2.5 text-sm font-semibold text-[#6B7280] hover:bg-[#F3F4F6]"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={confirmDelete}
+                  className="rounded-xl bg-[#EF4444] px-8 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[#EF4444]/20 hover:bg-[#DC2626]"
+                >
+                  Excluir
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
+const StatusBadge: React.FC<{ status: QuoteStatus }> = ({ status }) => {
+  const config: Record<string, { label: string; classes: string; icon: any }> = {
+    received: { label: 'Recebido', classes: 'bg-gray-100 text-gray-700', icon: Clock },
+    analyzing: { label: 'Em Análise', classes: 'bg-martins-blue text-[#111827]', icon: AlertCircle },
+    negotiating: { label: 'Em Tratativa', classes: 'bg-indigo-100 text-indigo-700', icon: FileText },
+    awaiting_approval: { label: 'Aguardando Aprovação', classes: 'bg-purple-100 text-purple-700', icon: Users },
+    executing: { label: 'Execução', classes: 'bg-emerald-100 text-emerald-700', icon: CheckCircle },
+    finished: { label: 'Finalizado', classes: 'bg-amber-100 text-amber-700', icon: TrendingUp },
+    // Fallbacks for old status values
+    draft: { label: 'Rascunho', classes: 'bg-gray-100 text-gray-700', icon: Clock },
+    review: { label: 'Revisão', classes: 'bg-martins-blue text-[#111827]', icon: AlertCircle },
+    sent: { label: 'Enviado', classes: 'bg-indigo-100 text-indigo-700', icon: FileText },
+    viewed: { label: 'Visualizado', classes: 'bg-purple-100 text-purple-700', icon: Users },
+    approved: { label: 'Aprovado', classes: 'bg-emerald-100 text-emerald-700', icon: CheckCircle },
+    rejected: { label: 'Rejeitado', classes: 'bg-rose-100 text-rose-700', icon: X },
+    converted: { label: 'Convertido', classes: 'bg-amber-100 text-amber-700', icon: TrendingUp },
+  };
+
+  const badgeConfig = config[status] || { label: status, classes: 'bg-gray-100 text-gray-700', icon: Clock };
+  const { label, classes, icon: Icon } = badgeConfig;
+
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold uppercase tracking-wider", classes)}>
+      <Icon className="h-3 w-3" />
+      {label}
+    </span>
+  );
+};
