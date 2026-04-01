@@ -15,7 +15,7 @@ export const Settings: React.FC = () => {
   const [companySaving, setCompanySaving] = useState(false);
 
   const [companyData, setCompanyData] = useState<CompanySettings>({
-    id: 'company',
+    id: '00000000-0000-0000-0000-000000000000',
     name: '',
     logoUrl: '',
     address: '',
@@ -51,13 +51,24 @@ export const Settings: React.FC = () => {
   };
 
   const fetchCompanyData = async () => {
-    const { data, error } = await supabase.from('settings').select('*').eq('id', 'company').single();
+    const { data, error } = await supabase.from('company_settings').select('*').limit(1).single();
     if (error) {
-      console.error('Error fetching company data:', error);
+      if (error.code !== 'PGRST116') { // Not found is okay for first time
+        console.error('Error fetching company data:', error);
+      }
       return;
     }
     if (data) {
-      setCompanyData(data.data as CompanySettings);
+      setCompanyData({
+        id: data.id,
+        name: data.name,
+        logoUrl: data.logo_url,
+        address: data.address,
+        phone: data.phone,
+        email: data.email,
+        website: data.website,
+        updatedAt: data.updated_at,
+      });
     }
   };
 
@@ -80,19 +91,21 @@ export const Settings: React.FC = () => {
     e.preventDefault();
     setCompanySaving(true);
     try {
-      const { error } = await supabase.from('settings').upsert({
-        id: 'company',
-        data: {
-          ...companyData,
-          updatedAt: new Date().toISOString(),
-        },
+      const { error } = await supabase.from('company_settings').upsert({
+        id: companyData.id,
+        name: companyData.name,
+        logo_url: companyData.logoUrl,
+        address: companyData.address,
+        phone: companyData.phone,
+        email: companyData.email,
+        website: companyData.website,
         updated_at: new Date().toISOString(),
       });
       if (error) throw error;
       alert('Dados da empresa salvos com sucesso!');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error saving company data:', error);
-      alert('Erro ao salvar dados da empresa.');
+      alert(`Erro ao salvar dados da empresa: ${error.message}`);
     } finally {
       setCompanySaving(false);
     }
@@ -286,7 +299,7 @@ export const Settings: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-[#F3F4F6]">
                 {users.map((u) => (
-                  <tr key={u.id} className="group">
+                  <tr key={u.uid} className="group">
                     <td className="py-4 pl-2">
                       <div className="flex items-center gap-3">
                         <img src={u.photoURL} className="h-8 w-8 rounded-full" referrerPolicy="no-referrer" />
@@ -297,8 +310,8 @@ export const Settings: React.FC = () => {
                     <td className="py-4">
                       <select
                         value={u.role}
-                        onChange={(e) => updateUserRole(u.id, e.target.value as UserRole)}
-                        disabled={u.id === profile?.id}
+                        onChange={(e) => updateUserRole(u.uid, e.target.value as UserRole)}
+                        disabled={u.uid === profile?.uid}
                         className="rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] px-2 py-1 text-xs font-medium focus:outline-none disabled:opacity-50"
                       >
                         <option value="admin">Admin</option>
@@ -308,7 +321,7 @@ export const Settings: React.FC = () => {
                       </select>
                     </td>
                     <td className="py-4 pr-2 text-right">
-                      {u.id === profile?.id && <span className="text-[10px] font-bold uppercase text-[#111827]">Você</span>}
+                      {u.uid === profile?.uid && <span className="text-[10px] font-bold uppercase text-[#111827]">Você</span>}
                     </td>
                   </tr>
                 ))}

@@ -70,8 +70,9 @@ export const Customers: React.FC = () => {
       setEditingCustomer(null);
       setFormData({ name: '', document: '', email: '', phone: '', address: '', observations: '' });
       fetchCustomers();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error saving customer:', error);
+      alert(`Erro ao salvar cliente: ${error.message || 'Verifique se o CPF/CNPJ já está cadastrado.'}`);
     }
   };
 

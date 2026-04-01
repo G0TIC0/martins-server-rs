@@ -50,7 +50,7 @@ export const QuoteDetail: React.FC = () => {
         const [custRes, itemRes, settingsRes] = await Promise.all([
           supabase.from('customers').select('*').order('name'),
           supabase.from('items').select('*').order('name'),
-          supabase.from('settings').select('*').eq('id', 'company').single(),
+          supabase.from('company_settings').select('*').eq('id', 'company').single(),
         ]);
 
         if (custRes.error) throw custRes.error;
@@ -60,7 +60,17 @@ export const QuoteDetail: React.FC = () => {
         setCatalogItems((itemRes.data || []).map(mapItem));
         
         if (settingsRes.data) {
-          setCompanySettings(settingsRes.data.data as CompanySettings);
+          const data = settingsRes.data;
+          setCompanySettings({
+            id: data.id,
+            name: data.name,
+            logoUrl: data.logo_url,
+            address: data.address,
+            phone: data.phone,
+            email: data.email,
+            website: data.website,
+            updatedAt: data.updated_at,
+          });
         }
 
         if (id && id !== 'new') {
@@ -164,7 +174,7 @@ export const QuoteDetail: React.FC = () => {
     const event: TimelineEvent = {
       status: newStatus,
       timestamp: new Date().toISOString(),
-      userId: profile?.id || '',
+      userId: profile?.uid || '',
       userName: profile?.displayName || 'Sistema',
       userRole: profile?.role || 'admin',
     };
@@ -223,7 +233,7 @@ export const QuoteDetail: React.FC = () => {
         const initialEvent: TimelineEvent = {
           status: 'received',
           timestamp: new Date().toISOString(),
-          userId: profile?.id || '',
+          userId: profile?.uid || '',
           userName: profile?.displayName || 'Sistema',
           userRole: profile?.role || 'admin',
         };
@@ -234,7 +244,7 @@ export const QuoteDetail: React.FC = () => {
             ...data,
             status: 'received',
             timeline: [initialEvent],
-            created_by: profile?.id,
+            created_by: profile?.uid,
             created_at: new Date().toISOString(),
           })
           .select()
@@ -257,8 +267,9 @@ export const QuoteDetail: React.FC = () => {
       await generatePDF();
       
       alert('Orçamento salvo e PDF gerado com sucesso!');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error saving quote:', error);
+      alert(`Erro ao salvar orçamento: ${error.message}`);
     } finally {
       setSaving(false);
     }

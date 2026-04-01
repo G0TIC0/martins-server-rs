@@ -8,7 +8,7 @@ import { cn, formatCurrency, mapItem, mapNcm } from '../lib/utils';
 import { suggestServiceDescription } from '../services/geminiService';
 
 export const Items: React.FC = () => {
-  const { isManager } = useSupabase();
+  const { isManager, profile } = useSupabase();
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -116,14 +116,18 @@ export const Items: React.FC = () => {
       } else {
         const { error } = await supabase
           .from('items')
-          .insert(itemData);
+          .insert({
+            ...itemData,
+            created_by: profile?.uid,
+          });
         if (error) throw error;
       }
       resetForm();
       fetchItems();
       setIsModalOpen(false);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error saving item:', error);
+      alert(`Erro ao salvar item: ${error.message}`);
     }
   };
 
