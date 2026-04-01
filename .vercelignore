@@ -2,5 +2,12 @@ node_modules
 dist
 .env
 .env.local
-.vercel
-*.log
+.env.development.local
+.env.test.local
+.env.production.local
+.DS_Store
+.git
+.gitignore
+firebase-blueprint.json
+firestore.rules
+metadata.json

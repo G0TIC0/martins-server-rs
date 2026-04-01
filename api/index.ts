@@ -1,14 +1,6 @@
-import express from "express";
+import { createServer } from '../server';
 
-const app = express();
-app.use(express.json());
-
-// Rota de saúde para o Vercel
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", environment: "vercel" });
-});
-
-// Você pode adicionar mais rotas de API aqui
-// Elas estarão disponíveis em /api/*
-
-export default app;
+export default async (req: any, res: any) => {
+  const app = await createServer();
+  return app(req, res);
+};

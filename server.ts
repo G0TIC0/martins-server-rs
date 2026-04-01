@@ -6,9 +6,8 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-async function startServer() {
+export async function createServer() {
   const app = express();
-  const PORT = 3000;
 
   // Allow embedding in iframes
   app.use((req, res, next) => {
@@ -39,9 +38,15 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  return app;
+}
+
+if (process.env.NODE_ENV !== "production" && fileURLToPath(import.meta.url) === process.argv[1]) {
+  createServer().then(app => {
+    const PORT = 3000;
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
   });
 }
 
-startServer();
