@@ -74,7 +74,10 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
         <div className="border-t border-[#E5E7EB] p-4">
           <button
-            onClick={logout}
+            onClick={() => {
+              console.log('[Layout] Logout button clicked');
+              logout();
+            }}
             className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-[#EF4444] hover:bg-[#FEF2F2] transition-colors"
           >
             <LogOut className="h-5 w-5" />

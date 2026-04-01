@@ -25,6 +25,10 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Use refs to track current state for onAuthStateChange closure
+  const userRef = React.useRef<User | null>(null);
+  const profileRef = React.useRef<UserProfile | null>(null);
+
   useEffect(() => {
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
     const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -36,107 +40,157 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
 
     const fetchProfile = async (userId: string) => {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
+      try {
+        console.log('[SupabaseContext] Fetching profile for:', userId);
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', userId)
+          .single();
 
-      if (error) {
-        console.error('Error fetching profile:', error);
+        if (error) {
+          console.error('[SupabaseContext] Error fetching profile:', error);
+          return null;
+        }
+
+        const mappedProfile = {
+          uid: data.id,
+          email: data.email,
+          displayName: data.display_name || '',
+          photoURL: data.photo_url || '',
+          role: data.role as UserRole,
+          cpf: data.cpf,
+          phone: data.phone,
+          createdAt: data.created_at,
+        } as UserProfile;
+
+        return mappedProfile;
+      } catch (err) {
+        console.error('[SupabaseContext] Unexpected error in fetchProfile:', err);
         return null;
       }
-
-      return {
-        uid: data.id,
-        email: data.email,
-        displayName: data.display_name || '',
-        photoURL: data.photo_url || '',
-        role: data.role as UserRole,
-        cpf: data.cpf,
-        phone: data.phone,
-        createdAt: data.created_at,
-      } as UserProfile;
     };
 
-    // Check active sessions and sets the user
-    const initAuth = async () => {
+    const initialize = async () => {
       try {
+        console.log('[SupabaseContext] Initializing auth...');
         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
         
         if (sessionError) {
-          console.error('Error getting session:', sessionError);
-          setLoading(false);
-          return;
+          console.error('[SupabaseContext] Session error:', sessionError);
         }
 
         const currentUser = session?.user ?? null;
+        userRef.current = currentUser;
         setUser(currentUser);
-        
+
         if (currentUser) {
-          try {
-            const userProfile = await fetchProfile(currentUser.id);
-            setProfile(userProfile);
-          } catch (profileError) {
-            console.error('Error fetching profile in initAuth:', profileError);
-          }
+          const userProfile = await fetchProfile(currentUser.id);
+          profileRef.current = userProfile;
+          setProfile(userProfile);
+        } else {
+          profileRef.current = null;
+          setProfile(null);
         }
-      } catch (error) {
-        console.error('Critical error during Supabase initialization:', error);
+      } catch (err) {
+        console.error('[SupabaseContext] Initialization error:', err);
       } finally {
+        console.log('[SupabaseContext] Initialization complete.');
         setLoading(false);
       }
     };
 
-    initAuth();
+    initialize();
 
-    // Listen for changes on auth state (sign in, sign out, etc.)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      try {
-        const currentUser = session?.user ?? null;
-        setUser(currentUser);
-        if (currentUser) {
-          const userProfile = await fetchProfile(currentUser.id);
-          setProfile(userProfile);
-        } else {
-          setProfile(null);
+    // Listen for changes on auth state
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('[SupabaseContext] Auth event:', event);
+      const currentUser = session?.user ?? null;
+      
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+        // Only update if user ID changed or we don't have a profile yet (and we haven't tried recently)
+        if (currentUser?.id !== userRef.current?.id || (!profileRef.current && currentUser)) {
+          userRef.current = currentUser;
+          setUser(currentUser);
+          if (currentUser) {
+            const userProfile = await fetchProfile(currentUser.id);
+            profileRef.current = userProfile;
+            setProfile(userProfile);
+          }
         }
-      } catch (error) {
-        console.error('Error during onAuthStateChange:', error);
-      } finally {
-        setLoading(false);
+      } else if (event === 'SIGNED_OUT') {
+        userRef.current = null;
+        profileRef.current = null;
+        setUser(null);
+        setProfile(null);
       }
+      
+      setLoading(false);
     });
 
-    return () => subscription.unsubscribe();
+    // Safety timeout to ensure loading is cleared
+    const timeoutId = setTimeout(() => {
+      console.log('[SupabaseContext] Safety timeout triggered.');
+      setLoading(false);
+    }, 6000);
+
+    return () => {
+      subscription.unsubscribe();
+      clearTimeout(timeoutId);
+    };
   }, []);
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-  };
+  const handleLogout = React.useCallback(async () => {
+    console.log('[SupabaseContext] Logging out...');
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+      
+      // Clear state immediately
+      userRef.current = null;
+      profileRef.current = null;
+      setUser(null);
+      setProfile(null);
+      
+      console.log('[SupabaseContext] Logout successful.');
+    } catch (err: any) {
+      console.error('[SupabaseContext] Logout error:', err);
+      alert(`Erro ao sair: ${err.message}`);
+      
+      // Fallback: clear state anyway
+      userRef.current = null;
+      profileRef.current = null;
+      setUser(null);
+      setProfile(null);
+    }
+  }, []);
 
-  const role = profile?.role;
-  const isAdmin = role === 'admin' || user?.email === 'mig7mor@gmail.com';
-  const isManager = role === 'manager' || isAdmin;
-  const isSales = role === 'sales' || isManager;
-  const isFinance = role === 'finance' || isManager;
-  const isTechnician = role === 'technician' || isManager;
-  const isCustomer = role === 'customer';
+  const value = React.useMemo(() => {
+    const role = profile?.role;
+    const isAdmin = role === 'admin' || user?.email === 'mig7mor@gmail.com';
+    const isManager = role === 'manager' || isAdmin;
+    const isSales = role === 'sales' || isManager;
+    const isFinance = role === 'finance' || isManager;
+    const isTechnician = role === 'technician' || isManager;
+    const isCustomer = role === 'customer';
+
+    return {
+      user,
+      profile,
+      loading,
+      error,
+      logout: handleLogout,
+      isAdmin,
+      isManager,
+      isSales,
+      isFinance,
+      isTechnician,
+      isCustomer
+    };
+  }, [user, profile, loading, error, handleLogout]);
 
   return (
-    <SupabaseContext.Provider value={{ 
-      user, 
-      profile, 
-      loading, 
-      error,
-      logout: handleLogout, 
-      isAdmin, 
-      isManager, 
-      isSales, 
-      isFinance, 
-      isTechnician, 
-      isCustomer 
-    }}>
+    <SupabaseContext.Provider value={value}>
       {error ? (
         <div className="flex h-screen items-center justify-center bg-red-50 p-4">
           <div className="max-w-md rounded-2xl bg-white p-8 shadow-xl text-center">

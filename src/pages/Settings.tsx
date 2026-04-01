@@ -28,17 +28,25 @@ export const Settings: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
+        console.log('[Settings] Fetching data...');
         if (isAdmin) {
           await fetchUsers();
         }
         await fetchCompanyData();
       } catch (error) {
-        console.error('Error fetching data:', error);
+        console.error('[Settings] Error fetching data:', error);
       } finally {
         setLoading(false);
       }
     };
     fetchData();
+
+    // Safety timeout
+    const timeoutId = setTimeout(() => {
+      setLoading(false);
+    }, 5000);
+
+    return () => clearTimeout(timeoutId);
   }, [isAdmin]);
 
   const fetchUsers = async () => {

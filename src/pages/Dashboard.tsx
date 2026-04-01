@@ -15,6 +15,7 @@ export const Dashboard: React.FC = () => {
   useEffect(() => {
     const fetchQuotes = async () => {
       try {
+        console.log('[Dashboard] Fetching quotes...');
         const { data, error } = await supabase
           .from('quotes')
           .select('*')
@@ -26,13 +27,20 @@ export const Dashboard: React.FC = () => {
         const mappedData = (data || []).map(mapQuote);
         setQuotes(mappedData);
       } catch (error) {
-        console.error('Error fetching quotes:', error);
+        console.error('[Dashboard] Error fetching quotes:', error);
       } finally {
         setLoading(false);
       }
     };
 
     fetchQuotes();
+
+    // Safety timeout
+    const timeoutId = setTimeout(() => {
+      setLoading(false);
+    }, 5000);
+
+    return () => clearTimeout(timeoutId);
   }, []);
 
   const stats = {
