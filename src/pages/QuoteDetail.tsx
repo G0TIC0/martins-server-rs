@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { collection, doc, getDoc, getDocs, setDoc, updateDoc, serverTimestamp, addDoc } from 'firebase/firestore';
-import { db, auth } from '../firebase';
+import { supabase } from '../lib/supabase';
 import { Quote, Customer, Item, QuoteItem, QuoteStatus, CompanySettings, TimelineEvent, QuoteClassification } from '../types';
-import { useFirebase } from '../context/FirebaseContext';
+import { useSupabase } from '../context/SupabaseContext';
+import { mapQuote, mapCustomer, mapItem, mapProfile } from '../lib/utils';
 import { Plus, Trash2, Save, Send, CheckCircle, XCircle, X, Search, FileText, Sparkles, AlertCircle, ChevronLeft, Download, User, Package, Calculator, Clock, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatCurrency, generateQuoteNumber } from '../lib/utils';
@@ -14,7 +14,7 @@ import autoTable from 'jspdf-autotable';
 export const QuoteDetail: React.FC = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { profile, isSales, isManager, isAdmin, isTechnician, isCustomer } = useFirebase();
+  const { profile, isSales, isManager, isAdmin, isTechnician, isCustomer } = useSupabase();
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -47,22 +47,32 @@ export const QuoteDetail: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [custSnap, itemSnap, companySnap] = await Promise.all([
-          getDocs(collection(db, 'customers')),
-          getDocs(collection(db, 'items')),
-          getDoc(doc(db, 'settings', 'company')),
+        const [custRes, itemRes, settingsRes] = await Promise.all([
+          supabase.from('customers').select('*').order('name'),
+          supabase.from('items').select('*').order('name'),
+          supabase.from('settings').select('*').eq('id', 'company').single(),
         ]);
-        setCustomers(custSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Customer)));
-        setCatalogItems(itemSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Item)));
+
+        if (custRes.error) throw custRes.error;
+        if (itemRes.error) throw itemRes.error;
+
+        setCustomers((custRes.data || []).map(mapCustomer));
+        setCatalogItems((itemRes.data || []).map(mapItem));
         
-        if (companySnap.exists()) {
-          setCompanySettings(companySnap.data() as CompanySettings);
+        if (settingsRes.data) {
+          setCompanySettings(settingsRes.data.data as CompanySettings);
         }
 
         if (id && id !== 'new') {
-          const quoteDoc = await getDoc(doc(db, 'quotes', id));
-          if (quoteDoc.exists()) {
-            setQuote({ id: quoteDoc.id, ...quoteDoc.data() } as Quote);
+          const { data: quoteData, error: quoteError } = await supabase
+            .from('quotes')
+            .select('*')
+            .eq('id', id)
+            .single();
+          
+          if (quoteError) throw quoteError;
+          if (quoteData) {
+            setQuote(mapQuote(quoteData));
           }
         }
       } catch (error) {
@@ -148,36 +158,13 @@ export const QuoteDetail: React.FC = () => {
     }));
   };
 
-  const handleFirestoreError = (error: any, operationType: string, path: string | null) => {
-    const errInfo = {
-      error: error instanceof Error ? error.message : String(error),
-      authInfo: {
-        userId: auth.currentUser?.uid,
-        email: auth.currentUser?.email,
-        emailVerified: auth.currentUser?.emailVerified,
-        isAnonymous: auth.currentUser?.isAnonymous,
-        tenantId: auth.currentUser?.tenantId,
-        providerInfo: auth.currentUser?.providerData.map(provider => ({
-          providerId: provider.providerId,
-          displayName: provider.displayName,
-          email: provider.email,
-          photoUrl: provider.photoURL
-        })) || []
-      },
-      operationType,
-      path
-    };
-    console.error('Firestore Error Detail:', JSON.stringify(errInfo));
-    throw new Error(JSON.stringify(errInfo));
-  };
-
   const handleStatusChange = async (newStatus: QuoteStatus) => {
     if (!id || id === 'new') return;
     
     const event: TimelineEvent = {
       status: newStatus,
       timestamp: new Date().toISOString(),
-      userId: profile?.uid || '',
+      userId: profile?.id || '',
       userName: profile?.displayName || 'Sistema',
       userRole: profile?.role || 'admin',
     };
@@ -185,14 +172,19 @@ export const QuoteDetail: React.FC = () => {
     const updatedTimeline = [...(quote.timeline || []), event];
     
     try {
-      await updateDoc(doc(db, 'quotes', id), {
-        status: newStatus,
-        timeline: updatedTimeline,
-        updatedAt: serverTimestamp(),
-      });
+      const { error } = await supabase
+        .from('quotes')
+        .update({
+          status: newStatus,
+          timeline: updatedTimeline,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id);
+
+      if (error) throw error;
       setQuote(prev => ({ ...prev, status: newStatus, timeline: updatedTimeline }));
     } catch (error) {
-      handleFirestoreError(error, 'update', `quotes/${id}`);
+      console.error('Error updating status:', error);
     }
   };
 
@@ -204,38 +196,61 @@ export const QuoteDetail: React.FC = () => {
     setSaving(true);
     try {
       const data = {
-        ...quote,
-        updatedAt: serverTimestamp(),
+        quote_number: quote.quoteNumber,
+        title: quote.title,
+        customer_id: quote.customerId,
+        customer_name: quote.customerName,
+        status: quote.status,
+        classification: quote.classification,
+        vehicle_plate: quote.vehiclePlate,
+        vehicle_model: quote.vehicleModel,
+        observations: quote.observations,
+        items: quote.items,
+        timeline: quote.timeline,
+        subtotal: quote.subtotal,
+        discount_total: quote.discountTotal,
+        tax_total: quote.taxTotal,
+        shipping_fee: quote.shippingFee,
+        urgency_fee: quote.urgencyFee,
+        grand_total: quote.grandTotal,
+        valid_until: quote.validUntil,
+        notes: quote.notes,
+        terms: quote.terms,
+        updated_at: new Date().toISOString(),
       };
 
-      let finalId = id;
       if (id === 'new') {
         const initialEvent: TimelineEvent = {
           status: 'received',
           timestamp: new Date().toISOString(),
-          userId: profile?.uid || '',
+          userId: profile?.id || '',
           userName: profile?.displayName || 'Sistema',
           userRole: profile?.role || 'admin',
         };
-        try {
-          const docRef = await addDoc(collection(db, 'quotes'), {
+        
+        const { data: newQuote, error } = await supabase
+          .from('quotes')
+          .insert({
             ...data,
             status: 'received',
             timeline: [initialEvent],
-            createdBy: profile?.uid,
-            createdAt: serverTimestamp(),
-          });
-          finalId = docRef.id;
-          navigate(`/quotes/${docRef.id}`, { replace: true });
-        } catch (error) {
-          handleFirestoreError(error, 'create', 'quotes');
+            created_by: profile?.id,
+            created_at: new Date().toISOString(),
+          })
+          .select()
+          .single();
+
+        if (error) throw error;
+        if (newQuote) {
+          navigate(`/quotes/${newQuote.id}`, { replace: true });
         }
       } else {
-        try {
-          await updateDoc(doc(db, 'quotes', id!), data);
-        } catch (error) {
-          handleFirestoreError(error, 'update', `quotes/${id}`);
-        }
+        const { error } = await supabase
+          .from('quotes')
+          .update(data)
+          .eq('id', id!);
+        
+        if (error) throw error;
       }
       
       // Generate PDF after saving

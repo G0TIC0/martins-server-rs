@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, Users, Package, FileText, Settings, LogOut, Menu, X, Bell, Search, User as UserIcon, Disc } from 'lucide-react';
-import { useFirebase } from '../context/FirebaseContext';
+import { useSupabase } from '../context/SupabaseContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 
@@ -14,7 +14,7 @@ const navItems = [
 ];
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { profile, logout, isSales, isManager, isAdmin, isTechnician, isCustomer } = useFirebase();
+  const { profile, logout, isSales, isManager, isAdmin, isTechnician, isCustomer } = useSupabase();
   const location = useLocation();
   const navigate = useNavigate();
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(true);

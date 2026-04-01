@@ -1,14 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { collection, query, getDocs, addDoc, updateDoc, deleteDoc, doc, orderBy, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase';
+import { supabase } from '../lib/supabase';
 import { Customer } from '../types';
-import { useFirebase } from '../context/FirebaseContext';
+import { useSupabase } from '../context/SupabaseContext';
 import { Plus, Search, Edit2, Trash2, X, User, Mail, Phone, FileText, MapPin } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { cn } from '../lib/utils';
+import { cn, mapCustomer } from '../lib/utils';
 
 export const Customers: React.FC = () => {
-  const { profile } = useFirebase();
+  const { profile } = useSupabase();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -31,10 +30,14 @@ export const Customers: React.FC = () => {
 
   const fetchCustomers = async () => {
     try {
-      const q = query(collection(db, 'customers'), orderBy('createdAt', 'desc'));
-      const snapshot = await getDocs(q);
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Customer));
-      setCustomers(data);
+      const { data, error } = await supabase
+        .from('customers')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      const mappedData = (data || []).map(mapCustomer);
+      setCustomers(mappedData);
     } catch (error) {
       console.error('Error fetching customers:', error);
     } finally {
@@ -46,16 +49,22 @@ export const Customers: React.FC = () => {
     e.preventDefault();
     try {
       if (editingCustomer) {
-        await updateDoc(doc(db, 'customers', editingCustomer.id), {
-          ...formData,
-          updatedAt: serverTimestamp(),
-        });
+        const { error } = await supabase
+          .from('customers')
+          .update({
+            ...formData,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', editingCustomer.id);
+        if (error) throw error;
       } else {
-        await addDoc(collection(db, 'customers'), {
-          ...formData,
-          createdBy: profile?.uid,
-          createdAt: serverTimestamp(),
-        });
+        const { error } = await supabase
+          .from('customers')
+          .insert({
+            ...formData,
+            created_by: profile?.uid,
+          });
+        if (error) throw error;
       }
       setIsModalOpen(false);
       setEditingCustomer(null);
@@ -86,7 +95,8 @@ export const Customers: React.FC = () => {
   const confirmDelete = async () => {
     if (!deleteConfirmId) return;
     try {
-      await deleteDoc(doc(db, 'customers', deleteConfirmId));
+      const { error } = await supabase.from('customers').delete().eq('id', deleteConfirmId);
+      if (error) throw error;
       fetchCustomers();
     } catch (error) {
       console.error('Error deleting customer:', error);

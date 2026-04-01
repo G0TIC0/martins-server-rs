@@ -1,15 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { collection, query, getDocs, addDoc, updateDoc, deleteDoc, doc, orderBy, serverTimestamp, setDoc, where } from 'firebase/firestore';
-import { db } from '../firebase';
+import { supabase } from '../lib/supabase';
 import { Item, ItemType, Ncm } from '../types';
-import { useFirebase } from '../context/FirebaseContext';
+import { useSupabase } from '../context/SupabaseContext';
 import { Plus, Search, Edit2, Trash2, X, Package, Tag, DollarSign, Box, Layers, Sparkles, User, Info, Hash, PlusCircle, ChevronDown, Save, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { cn, formatCurrency } from '../lib/utils';
+import { cn, formatCurrency, mapItem, mapNcm } from '../lib/utils';
 import { suggestServiceDescription } from '../services/geminiService';
 
 export const Items: React.FC = () => {
-  const { isManager } = useFirebase();
+  const { isManager } = useSupabase();
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -44,10 +43,14 @@ export const Items: React.FC = () => {
 
   const fetchNcms = async () => {
     try {
-      const q = query(collection(db, 'ncms'), orderBy('code', 'asc'));
-      const snapshot = await getDocs(q);
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Ncm));
-      setNcms(data);
+      const { data, error } = await supabase
+        .from('ncms')
+        .select('*')
+        .order('code', { ascending: true });
+
+      if (error) throw error;
+      const mappedData = (data || []).map(mapNcm);
+      setNcms(mappedData);
     } catch (error) {
       console.error('Error fetching NCMs:', error);
     }
@@ -55,10 +58,14 @@ export const Items: React.FC = () => {
 
   const fetchItems = async () => {
     try {
-      const q = query(collection(db, 'items'), orderBy('name', 'asc'));
-      const snapshot = await getDocs(q);
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Item));
-      setItems(data);
+      const { data, error } = await supabase
+        .from('items')
+        .select('*')
+        .order('name', { ascending: true });
+
+      if (error) throw error;
+      const mappedData = (data || []).map(mapItem);
+      setItems(mappedData);
     } catch (error) {
       console.error('Error fetching items:', error);
     } finally {
@@ -73,26 +80,44 @@ export const Items: React.FC = () => {
     try {
       // Save or update NCM in the ncms collection
       if (formData.ncm && formData.ncmDescription) {
-        const ncmRef = doc(db, 'ncms', formData.ncm);
-        await setDoc(ncmRef, {
-          code: formData.ncm,
-          description: formData.ncmDescription,
-          updatedAt: serverTimestamp(),
-        }, { merge: true });
+        const { error: ncmError } = await supabase
+          .from('ncms')
+          .upsert({
+            code: formData.ncm,
+            description: formData.ncmDescription,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'code' });
+        
+        if (ncmError) throw ncmError;
         fetchNcms();
       }
 
+      const itemData = {
+        name: formData.name,
+        description: formData.description,
+        type: formData.type,
+        base_price: formData.basePrice,
+        unit: formData.unit,
+        active: formData.active,
+        ncm: formData.ncm,
+        ncm_description: formData.ncmDescription,
+        fci: formData.fci,
+        part_codes: formData.partCodes,
+        observations: formData.observations,
+        updated_at: new Date().toISOString(),
+      };
+
       if (editingId) {
-        await updateDoc(doc(db, 'items', editingId), {
-          ...formData,
-          updatedAt: serverTimestamp(),
-        });
+        const { error } = await supabase
+          .from('items')
+          .update(itemData)
+          .eq('id', editingId);
+        if (error) throw error;
       } else {
-        await addDoc(collection(db, 'items'), {
-          ...formData,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
+        const { error } = await supabase
+          .from('items')
+          .insert(itemData);
+        if (error) throw error;
       }
       resetForm();
       fetchItems();
@@ -151,7 +176,8 @@ export const Items: React.FC = () => {
   const confirmDelete = async () => {
     if (!deleteConfirmId) return;
     try {
-      await deleteDoc(doc(db, 'items', deleteConfirmId));
+      const { error } = await supabase.from('items').delete().eq('id', deleteConfirmId);
+      if (error) throw error;
       fetchItems();
     } catch (error) {
       console.error('Error deleting item:', error);

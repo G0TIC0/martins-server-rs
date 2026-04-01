@@ -2,7 +2,7 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- Profiles Table (linked to auth.users)
-CREATE TABLE profiles (
+CREATE TABLE IF NOT EXISTS profiles (
   id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   email TEXT NOT NULL,
   display_name TEXT,
@@ -15,7 +15,7 @@ CREATE TABLE profiles (
 );
 
 -- Customers Table
-CREATE TABLE customers (
+CREATE TABLE IF NOT EXISTS customers (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   name TEXT NOT NULL,
   document TEXT NOT NULL UNIQUE,
@@ -29,7 +29,7 @@ CREATE TABLE customers (
 );
 
 -- Vehicles Table
-CREATE TABLE vehicles (
+CREATE TABLE IF NOT EXISTS vehicles (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
   plate TEXT NOT NULL UNIQUE,
@@ -44,7 +44,7 @@ CREATE TABLE vehicles (
 );
 
 -- Items Table (Catalog)
-CREATE TABLE items (
+CREATE TABLE IF NOT EXISTS items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   name TEXT NOT NULL,
   description TEXT,
@@ -63,7 +63,7 @@ CREATE TABLE items (
 );
 
 -- Quotes Table
-CREATE TABLE quotes (
+CREATE TABLE IF NOT EXISTS quotes (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   quote_number TEXT UNIQUE NOT NULL,
   title TEXT NOT NULL,
@@ -94,7 +94,7 @@ CREATE TABLE quotes (
 );
 
 -- Quote Items Table
-CREATE TABLE quote_items (
+CREATE TABLE IF NOT EXISTS quote_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   quote_id UUID REFERENCES quotes(id) ON DELETE CASCADE,
   item_id UUID REFERENCES items(id),
@@ -111,7 +111,7 @@ CREATE TABLE quote_items (
 );
 
 -- Timeline Events Table
-CREATE TABLE timeline_events (
+CREATE TABLE IF NOT EXISTS timeline_events (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   quote_id UUID REFERENCES quotes(id) ON DELETE CASCADE,
   status TEXT NOT NULL,
@@ -123,7 +123,7 @@ CREATE TABLE timeline_events (
 );
 
 -- NCMs Table
-CREATE TABLE ncms (
+CREATE TABLE IF NOT EXISTS ncms (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   code TEXT UNIQUE NOT NULL,
   description TEXT NOT NULL,
@@ -131,7 +131,7 @@ CREATE TABLE ncms (
 );
 
 -- Company Settings Table
-CREATE TABLE company_settings (
+CREATE TABLE IF NOT EXISTS company_settings (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   name TEXT NOT NULL,
   logo_url TEXT,
@@ -143,7 +143,7 @@ CREATE TABLE company_settings (
 );
 
 -- Audit Logs Table
-CREATE TABLE audit_logs (
+CREATE TABLE IF NOT EXISTS audit_logs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID REFERENCES auth.users(id),
   user_name TEXT,
@@ -167,12 +167,28 @@ ALTER TABLE company_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
 
 -- Policies (Basic examples, can be refined)
-CREATE POLICY "Public profiles are viewable by everyone." ON profiles FOR SELECT USING (true);
-CREATE POLICY "Users can update their own profile." ON profiles FOR UPDATE USING (auth.uid() = id);
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public profiles are viewable by everyone.' AND tablename = 'profiles') THEN
+        CREATE POLICY "Public profiles are viewable by everyone." ON profiles FOR SELECT USING (true);
+    END IF;
+    
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Users can update their own profile.' AND tablename = 'profiles') THEN
+        CREATE POLICY "Users can update their own profile." ON profiles FOR UPDATE USING (auth.uid() = id);
+    END IF;
 
-CREATE POLICY "Authenticated users can read all data." ON customers FOR SELECT USING (auth.role() = 'authenticated');
-CREATE POLICY "Authenticated users can insert data." ON customers FOR INSERT WITH CHECK (auth.role() = 'authenticated');
-CREATE POLICY "Authenticated users can update data." ON customers FOR UPDATE USING (auth.role() = 'authenticated');
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Authenticated users can read all data.' AND tablename = 'customers') THEN
+        CREATE POLICY "Authenticated users can read all data." ON customers FOR SELECT USING (auth.role() = 'authenticated');
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Authenticated users can insert data.' AND tablename = 'customers') THEN
+        CREATE POLICY "Authenticated users can insert data." ON customers FOR INSERT WITH CHECK (auth.role() = 'authenticated');
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Authenticated users can update data.' AND tablename = 'customers') THEN
+        CREATE POLICY "Authenticated users can update data." ON customers FOR UPDATE USING (auth.role() = 'authenticated');
+    END IF;
+END $$;
 
 -- Repeat similar policies for other tables or use a more restrictive approach based on roles
 -- For brevity, I'll apply a general "authenticated" policy to most tables
@@ -181,9 +197,15 @@ DECLARE
   t text;
 BEGIN
   FOR t IN (SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name NOT IN ('profiles', 'customers')) LOOP
-    EXECUTE format('CREATE POLICY "Authenticated users can read %I" ON %I FOR SELECT USING (auth.role() = ''authenticated'');', t, t);
-    EXECUTE format('CREATE POLICY "Authenticated users can insert %I" ON %I FOR INSERT WITH CHECK (auth.role() = ''authenticated'');', t, t);
-    EXECUTE format('CREATE POLICY "Authenticated users can update %I" ON %I FOR UPDATE USING (auth.role() = ''authenticated'');', t, t);
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = format('Authenticated users can read %I', t) AND tablename = t) THEN
+        EXECUTE format('CREATE POLICY "Authenticated users can read %I" ON %I FOR SELECT USING (auth.role() = ''authenticated'');', t, t);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = format('Authenticated users can insert %I', t) AND tablename = t) THEN
+        EXECUTE format('CREATE POLICY "Authenticated users can insert %I" ON %I FOR INSERT WITH CHECK (auth.role() = ''authenticated'');', t, t);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = format('Authenticated users can update %I', t) AND tablename = t) THEN
+        EXECUTE format('CREATE POLICY "Authenticated users can update %I" ON %I FOR UPDATE USING (auth.role() = ''authenticated'');', t, t);
+    END IF;
   END LOOP;
 END $$;
 
@@ -197,6 +219,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE PROCEDURE public.handle_new_user();

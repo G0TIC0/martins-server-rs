@@ -1,16 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { collection, query, getDocs, orderBy, deleteDoc, doc, where, addDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase';
+import { supabase } from '../lib/supabase';
 import { Quote, QuoteStatus } from '../types';
-import { useFirebase } from '../context/FirebaseContext';
+import { useSupabase } from '../context/SupabaseContext';
 import { Plus, Search, Eye, Trash2, FileText, Clock, CheckCircle, AlertCircle, X, TrendingUp, Users, ArrowUpRight, Copy, Mail, Edit2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { cn, formatCurrency, formatDateTime, generateQuoteNumber } from '../lib/utils';
+import { cn, formatCurrency, formatDateTime, generateQuoteNumber, mapQuote } from '../lib/utils';
 import { useNavigate } from 'react-router-dom';
 
 export const Quotes: React.FC = () => {
   const navigate = useNavigate();
-  const { isAdmin, isSales, isCustomer, profile } = useFirebase();
+  const { isAdmin, isSales, isCustomer, profile } = useSupabase();
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -19,26 +18,22 @@ export const Quotes: React.FC = () => {
 
   useEffect(() => {
     fetchQuotes();
-  }, []);
+  }, [isCustomer, profile]);
 
   const fetchQuotes = async () => {
     try {
-      let q;
+      let query = supabase.from('quotes').select('*').order('created_at', { ascending: false });
+
       if (isCustomer && profile) {
-        q = query(
-          collection(db, 'quotes'), 
-          where('customerId', '==', profile.uid),
-          orderBy('createdAt', 'desc')
-        );
-      } else {
-        q = query(collection(db, 'quotes'), orderBy('createdAt', 'desc'));
+        query = query.eq('customer_id', profile.uid);
       }
-      const snapshot = await getDocs(q);
-      const data = snapshot.docs.map(doc => {
-        const docData = doc.data();
-        return { id: doc.id, ...(docData as any) } as Quote;
-      });
-      setQuotes(data);
+
+      const { data, error } = await query;
+
+      if (error) throw error;
+
+      const mappedData = (data || []).map(mapQuote);
+      setQuotes(mappedData);
     } catch (error) {
       console.error('Error fetching quotes:', error);
     } finally {
@@ -53,7 +48,8 @@ export const Quotes: React.FC = () => {
   const confirmDelete = async () => {
     if (!deleteConfirmId) return;
     try {
-      await deleteDoc(doc(db, 'quotes', deleteConfirmId));
+      const { error } = await supabase.from('quotes').delete().eq('id', deleteConfirmId);
+      if (error) throw error;
       fetchQuotes();
     } catch (error) {
       console.error('Error deleting quote:', error);
@@ -64,15 +60,53 @@ export const Quotes: React.FC = () => {
 
   const handleDuplicate = async (quote: Quote) => {
     try {
-      const { id, createdAt, updatedAt, ...rest } = quote;
+      const { id, createdAt, updatedAt, items, timeline, ...rest } = quote;
       const newQuote = {
-        ...rest,
-        quoteNumber: generateQuoteNumber(),
-        status: 'draft',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        quote_number: generateQuoteNumber(),
+        title: rest.title,
+        classification: rest.classification,
+        customer_id: rest.customerId,
+        customer_name: rest.customerName,
+        vehicle_id: rest.vehicleId,
+        vehicle_plate: rest.vehiclePlate,
+        vehicle_model: rest.vehicleModel,
+        current_km: rest.currentKm,
+        status: 'received',
+        service_status: rest.serviceStatus,
+        subtotal: rest.subtotal,
+        discount_total: rest.discountTotal,
+        tax_total: rest.taxTotal,
+        shipping_fee: rest.shippingFee,
+        urgency_fee: rest.urgencyFee,
+        grand_total: rest.grandTotal,
+        valid_until: rest.validUntil,
+        notes: rest.notes,
+        terms: rest.terms,
+        observations: rest.observations,
+        created_by: profile?.uid,
       };
-      await addDoc(collection(db, 'quotes'), newQuote);
+
+      const { data, error } = await supabase.from('quotes').insert(newQuote).select().single();
+      if (error) throw error;
+
+      // Duplicate items if they exist
+      if (items && items.length > 0) {
+        const newItems = items.map(item => ({
+          quote_id: data.id,
+          item_id: item.itemId,
+          item_code: item.itemCode,
+          name: item.name,
+          ncm: item.ncm,
+          type: item.type,
+          quantity: item.quantity,
+          cost_price: item.costPrice,
+          unit_price: item.unitPrice,
+          discount: item.discount,
+          total: item.total,
+        }));
+        await supabase.from('quote_items').insert(newItems);
+      }
+
       fetchQuotes();
       alert('Orçamento duplicado com sucesso!');
     } catch (error) {

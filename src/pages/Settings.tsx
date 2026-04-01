@@ -1,14 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { collection, query, getDocs, updateDoc, doc, orderBy, getDoc, setDoc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { supabase } from '../lib/supabase';
 import { UserProfile, UserRole, CompanySettings } from '../types';
-import { useFirebase } from '../context/FirebaseContext';
+import { useSupabase } from '../context/SupabaseContext';
+import { mapProfile } from '../lib/utils';
 import { Settings as SettingsIcon, User, Shield, Bell, Database, Save, CheckCircle, AlertCircle, Building2, Globe, Mail, Phone, MapPin, Image as ImageIcon } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 
 export const Settings: React.FC = () => {
-  const { profile, isAdmin } = useFirebase();
+  const { profile, isAdmin } = useSupabase();
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -42,16 +42,22 @@ export const Settings: React.FC = () => {
   }, [isAdmin]);
 
   const fetchUsers = async () => {
-    const snapshot = await getDocs(collection(db, 'users'));
-    const data = snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() } as unknown as UserProfile));
-    setUsers(data);
+    const { data, error } = await supabase.from('profiles').select('*').order('display_name');
+    if (error) {
+      console.error('Error fetching users:', error);
+      return;
+    }
+    setUsers((data || []).map(mapProfile));
   };
 
   const fetchCompanyData = async () => {
-    const docRef = doc(db, 'settings', 'company');
-    const docSnap = await getDoc(docRef);
-    if (docSnap.exists()) {
-      setCompanyData(docSnap.data() as CompanySettings);
+    const { data, error } = await supabase.from('settings').select('*').eq('id', 'company').single();
+    if (error) {
+      console.error('Error fetching company data:', error);
+      return;
+    }
+    if (data) {
+      setCompanyData(data.data as CompanySettings);
     }
   };
 
@@ -74,11 +80,15 @@ export const Settings: React.FC = () => {
     e.preventDefault();
     setCompanySaving(true);
     try {
-      const docRef = doc(db, 'settings', 'company');
-      await setDoc(docRef, {
-        ...companyData,
-        updatedAt: new Date().toISOString(),
+      const { error } = await supabase.from('settings').upsert({
+        id: 'company',
+        data: {
+          ...companyData,
+          updatedAt: new Date().toISOString(),
+        },
+        updated_at: new Date().toISOString(),
       });
+      if (error) throw error;
       alert('Dados da empresa salvos com sucesso!');
     } catch (error) {
       console.error('Error saving company data:', error);
@@ -91,7 +101,8 @@ export const Settings: React.FC = () => {
   const updateUserRole = async (userId: string, newRole: UserRole) => {
     setSaving(true);
     try {
-      await updateDoc(doc(db, 'users', userId), { role: newRole });
+      const { error } = await supabase.from('profiles').update({ role: newRole }).eq('id', userId);
+      if (error) throw error;
       fetchUsers();
       alert('Papel do usuário atualizado com sucesso!');
     } catch (error) {
@@ -275,7 +286,7 @@ export const Settings: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-[#F3F4F6]">
                 {users.map((u) => (
-                  <tr key={u.uid} className="group">
+                  <tr key={u.id} className="group">
                     <td className="py-4 pl-2">
                       <div className="flex items-center gap-3">
                         <img src={u.photoURL} className="h-8 w-8 rounded-full" referrerPolicy="no-referrer" />
@@ -286,8 +297,8 @@ export const Settings: React.FC = () => {
                     <td className="py-4">
                       <select
                         value={u.role}
-                        onChange={(e) => updateUserRole(u.uid, e.target.value as UserRole)}
-                        disabled={u.uid === profile?.uid}
+                        onChange={(e) => updateUserRole(u.id, e.target.value as UserRole)}
+                        disabled={u.id === profile?.id}
                         className="rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] px-2 py-1 text-xs font-medium focus:outline-none disabled:opacity-50"
                       >
                         <option value="admin">Admin</option>
@@ -297,7 +308,7 @@ export const Settings: React.FC = () => {
                       </select>
                     </td>
                     <td className="py-4 pr-2 text-right">
-                      {u.uid === profile?.uid && <span className="text-[10px] font-bold uppercase text-[#111827]">Você</span>}
+                      {u.id === profile?.id && <span className="text-[10px] font-bold uppercase text-[#111827]">Você</span>}
                     </td>
                   </tr>
                 ))}
@@ -322,7 +333,7 @@ export const Settings: React.FC = () => {
             <p className="text-xs font-bold uppercase text-[#9CA3AF]">Status do Banco</p>
             <div className="mt-1 flex items-center gap-2">
               <div className="h-2 w-2 rounded-full bg-[#10B981]"></div>
-              <p className="font-medium text-[#111827]">Conectado (Firestore)</p>
+              <p className="font-medium text-[#111827]">Conectado (Supabase)</p>
             </div>
           </div>
           <div className="rounded-xl bg-[#F9FAFB] p-4">

@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { collection, query, getDocs, where, orderBy, limit } from 'firebase/firestore';
-import { db } from '../firebase';
+import { supabase } from '../lib/supabase';
 import { Quote, QuoteStatus } from '../types';
-import { cn, formatCurrency, formatDateTime } from '../lib/utils';
+import { cn, formatCurrency, formatDateTime, mapQuote } from '../lib/utils';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from 'recharts';
 import { TrendingUp, Users, FileText, CheckCircle, Clock, AlertCircle, ArrowUpRight, ArrowDownRight, X } from 'lucide-react';
 import { motion } from 'motion/react';
@@ -16,10 +15,16 @@ export const Dashboard: React.FC = () => {
   useEffect(() => {
     const fetchQuotes = async () => {
       try {
-        const q = query(collection(db, 'quotes'), orderBy('createdAt', 'desc'), limit(100));
-        const snapshot = await getDocs(q);
-        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Quote));
-        setQuotes(data);
+        const { data, error } = await supabase
+          .from('quotes')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(100);
+
+        if (error) throw error;
+
+        const mappedData = (data || []).map(mapQuote);
+        setQuotes(mappedData);
       } catch (error) {
         console.error('Error fetching quotes:', error);
       } finally {
