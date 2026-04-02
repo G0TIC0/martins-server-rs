@@ -7,6 +7,8 @@ import { Settings as SettingsIcon, User, Shield, Bell, Database, Save, CheckCirc
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 
+import { withRetry } from '../lib/supabase-retry';
+
 export const Settings: React.FC = () => {
   const { profile, isAdmin } = useSupabase();
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -50,16 +52,20 @@ export const Settings: React.FC = () => {
   }, [isAdmin]);
 
   const fetchUsers = async () => {
-    const { data, error } = await supabase.from('profiles').select('*').order('display_name');
+    const { data, error } = await withRetry(async () => 
+      await supabase.from('profiles').select('*').order('display_name')
+    ) as { data: any[] | null; error: any };
     if (error) {
       console.error('Error fetching users:', error);
       return;
     }
-    setUsers((data || []).map(mapProfile));
+    setUsers((data || []).map(mapProfile) as UserProfile[]);
   };
 
   const fetchCompanyData = async () => {
-    const { data, error } = await supabase.from('company_settings').select('*').limit(1).single();
+    const { data, error } = await withRetry(async () => 
+      await supabase.from('company_settings').select('*').limit(1).single()
+    ) as { data: any | null; error: any };
     if (error) {
       if (error.code !== 'PGRST116') { // Not found is okay for first time
         console.error('Error fetching company data:', error);
@@ -67,15 +73,16 @@ export const Settings: React.FC = () => {
       return;
     }
     if (data) {
+      const company = data as any;
       setCompanyData({
-        id: data.id,
-        name: data.name,
-        logoUrl: data.logo_url,
-        address: data.address,
-        phone: data.phone,
-        email: data.email,
-        website: data.website,
-        updatedAt: data.updated_at,
+        id: company.id,
+        name: company.name,
+        logoUrl: company.logo_url,
+        address: company.address,
+        phone: company.phone,
+        email: company.email,
+        website: company.website,
+        updatedAt: company.updated_at,
       });
     }
   };
@@ -99,16 +106,18 @@ export const Settings: React.FC = () => {
     e.preventDefault();
     setCompanySaving(true);
     try {
-      const { error } = await supabase.from('company_settings').upsert({
-        id: companyData.id,
-        name: companyData.name,
-        logo_url: companyData.logoUrl,
-        address: companyData.address,
-        phone: companyData.phone,
-        email: companyData.email,
-        website: companyData.website,
-        updated_at: new Date().toISOString(),
-      });
+      const { error } = await withRetry(async () => 
+        await supabase.from('company_settings').upsert({
+          id: companyData.id,
+          name: companyData.name,
+          logo_url: companyData.logoUrl,
+          address: companyData.address,
+          phone: companyData.phone,
+          email: companyData.email,
+          website: companyData.website,
+          updated_at: new Date().toISOString(),
+        })
+      ) as { error: any };
       if (error) throw error;
       alert('Dados da empresa salvos com sucesso!');
     } catch (error: any) {
@@ -122,7 +131,9 @@ export const Settings: React.FC = () => {
   const updateUserRole = async (userId: string, newRole: UserRole) => {
     setSaving(true);
     try {
-      const { error } = await supabase.from('profiles').update({ role: newRole }).eq('id', userId);
+      const { error } = await withRetry(async () => 
+        await supabase.from('profiles').update({ role: newRole }).eq('id', userId)
+      ) as { error: any };
       if (error) throw error;
       fetchUsers();
       alert('Papel do usuário atualizado com sucesso!');

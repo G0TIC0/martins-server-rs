@@ -6,8 +6,10 @@ import { Plus, Search, Edit2, Trash2, X, User, Mail, Phone, FileText, MapPin } f
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, mapCustomer } from '../lib/utils';
 
+import { withRetry } from '../lib/supabase-retry';
+
 export const Customers: React.FC = () => {
-  const { profile } = useSupabase();
+  const { profile, loading: profileLoading } = useSupabase();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -31,14 +33,16 @@ export const Customers: React.FC = () => {
 
   const fetchCustomers = async () => {
     try {
-      const { data, error } = await supabase
-        .from('customers')
-        .select('*')
-        .order('created_at', { ascending: false });
+      const { data, error } = await withRetry(async () => 
+        await supabase
+          .from('customers')
+          .select('*')
+          .order('created_at', { ascending: false })
+      ) as { data: any[] | null; error: any };
 
       if (error) throw error;
       const mappedData = (data || []).map(mapCustomer);
-      setCustomers(mappedData);
+      setCustomers(mappedData as Customer[]);
     } catch (error) {
       console.error('Error fetching customers:', error);
     } finally {
@@ -48,49 +52,65 @@ export const Customers: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (!profile?.uid) {
+      alert('Erro: Perfil de usuário não carregado. Por favor, recarregue a página.');
+      return;
+    }
+
     setSaving(true);
     
-    const performSave = async (retryCount = 0): Promise<void> => {
-      try {
-        if (editingCustomer) {
-          const { error } = await supabase
+    try {
+      const customerData = {
+        name: formData.name.trim(),
+        document: formData.document.replace(/\D/g, ''), // Remove non-digits for storage
+        email: formData.email.trim().toLowerCase() || null,
+        phone: formData.phone.trim() || null,
+        address: formData.address.trim(),
+        observations: formData.observations.trim(),
+      };
+
+      if (editingCustomer) {
+        const { error } = await withRetry(async () => 
+          await supabase
             .from('customers')
             .update({
-              ...formData,
+              ...customerData,
               updated_at: new Date().toISOString(),
             })
-            .eq('id', editingCustomer.id);
-          if (error) throw error;
-        } else {
-          const { error } = await supabase
+            .eq('id', editingCustomer.id)
+        ) as { error: any };
+        if (error) throw error;
+      } else {
+        const { error } = await withRetry(async () => 
+          await supabase
             .from('customers')
             .insert({
-              ...formData,
-              created_by: profile?.uid,
-            });
-          if (error) throw error;
-        }
-        
-        setIsModalOpen(false);
-        setEditingCustomer(null);
-        setFormData({ name: '', document: '', email: '', phone: '', address: '', observations: '' });
-        fetchCustomers();
-      } catch (error: any) {
-        // Handle the specific "stolen lock" error by retrying once after a short delay
-        if (error.message?.includes('stole it') && retryCount < 2) {
-          console.warn(`[Customers] Auth lock stolen, retrying save (attempt ${retryCount + 1})...`);
-          await new Promise(resolve => setTimeout(resolve, 500));
-          return performSave(retryCount + 1);
-        }
-        
-        console.error('Error saving customer:', error);
-        alert(`Erro ao salvar cliente: ${error.message || 'Verifique se o CPF/CNPJ já está cadastrado.'}`);
-      } finally {
-        setSaving(false);
+              ...customerData,
+              created_by: profile.uid,
+            })
+        ) as { error: any };
+        if (error) throw error;
       }
-    };
-
-    await performSave();
+      
+      setIsModalOpen(false);
+      setEditingCustomer(null);
+      setFormData({ name: '', document: '', email: '', phone: '', address: '', observations: '' });
+      await fetchCustomers();
+    } catch (error: any) {
+      console.error('Error saving customer:', error);
+      
+      let errorMessage = 'Erro ao salvar cliente.';
+      if (error.code === '23505') {
+        errorMessage = 'Este CPF/CNPJ já está cadastrado no sistema.';
+      } else if (error.message) {
+        errorMessage = `Erro: ${error.message}`;
+      }
+      
+      alert(errorMessage);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleEdit = (customer: Customer) => {
@@ -159,57 +179,63 @@ export const Customers: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
-        {filteredCustomers.map((customer) => (
-          <motion.div
-            key={customer.id}
-            layout
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="group relative rounded-2xl border border-[#E5E7EB] bg-white p-6 shadow-sm transition-all hover:shadow-md"
-          >
-            <div className="mb-4 flex items-start justify-between">
-              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-martins-blue text-[#111827]">
-                <User className="h-6 w-6" />
-              </div>
-              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button
-                  onClick={() => handleEdit(customer)}
-                  className="rounded-lg p-2 text-[#6B7280] hover:bg-[#F3F4F6] hover:text-[#111827]"
-                >
-                  <Edit2 className="h-4 w-4" />
-                </button>
-                <button
-                  onClick={() => handleDelete(customer.id)}
-                  className="rounded-lg p-2 text-[#6B7280] hover:bg-[#FEF2F2] hover:text-[#EF4444]"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-
-            <h3 className="text-lg font-bold text-[#111827]">{customer.name}</h3>
-            <p className="text-sm text-[#6B7280]">{customer.document}</p>
-
-            <div className="mt-4 space-y-2">
-              {customer.email && (
-                <div className="flex items-center gap-2 text-sm text-[#4B5563]">
-                  <Mail className="h-4 w-4 text-[#9CA3AF]" />
-                  {customer.email}
+        {loading ? (
+          <div className="col-span-full flex justify-center py-12">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-[#111827] border-t-transparent"></div>
+          </div>
+        ) : (
+          filteredCustomers.map((customer) => (
+            <motion.div
+              key={customer.id}
+              layout
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="group relative rounded-2xl border border-[#E5E7EB] bg-white p-6 shadow-sm transition-all hover:shadow-md"
+            >
+              <div className="mb-4 flex items-start justify-between">
+                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-martins-blue text-[#111827]">
+                  <User className="h-6 w-6" />
                 </div>
-              )}
-              {customer.phone && (
-                <div className="flex items-center gap-2 text-sm text-[#4B5563]">
-                  <Phone className="h-4 w-4 text-[#9CA3AF]" />
-                  {customer.phone}
+                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    onClick={() => handleEdit(customer)}
+                    className="rounded-lg p-2 text-[#6B7280] hover:bg-[#F3F4F6] hover:text-[#111827]"
+                  >
+                    <Edit2 className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(customer.id)}
+                    className="rounded-lg p-2 text-[#6B7280] hover:bg-[#FEF2F2] hover:text-[#EF4444]"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
                 </div>
-              )}
-              <div className="flex items-center gap-2 text-sm text-[#4B5563]">
-                <MapPin className="h-4 w-4 text-[#9CA3AF]" />
-                <span className="truncate">{customer.address}</span>
               </div>
-            </div>
-          </motion.div>
-        ))}
+
+              <h3 className="text-lg font-bold text-[#111827]">{customer.name}</h3>
+              <p className="text-sm text-[#6B7280]">{customer.document}</p>
+
+              <div className="mt-4 space-y-2">
+                {customer.email && (
+                  <div className="flex items-center gap-2 text-sm text-[#4B5563]">
+                    <Mail className="h-4 w-4 text-[#9CA3AF]" />
+                    {customer.email}
+                  </div>
+                )}
+                {customer.phone && (
+                  <div className="flex items-center gap-2 text-sm text-[#4B5563]">
+                    <Phone className="h-4 w-4 text-[#9CA3AF]" />
+                    {customer.phone}
+                  </div>
+                )}
+                <div className="flex items-center gap-2 text-sm text-[#4B5563]">
+                  <MapPin className="h-4 w-4 text-[#9CA3AF]" />
+                  <span className="truncate">{customer.address}</span>
+                </div>
+              </div>
+            </motion.div>
+          ))
+        )}
         {filteredCustomers.length === 0 && !loading && (
           <div className="col-span-full py-12 text-center text-[#9CA3AF]">Nenhum cliente encontrado.</div>
         )}
@@ -247,12 +273,13 @@ export const Customers: React.FC = () => {
                     />
                   </div>
                   <div className="space-y-2">
-                    <label className="text-sm font-semibold text-[#374151]">CPF / CNPJ</label>
+                    <label className="text-sm font-semibold text-[#374151]">CPF / CNPJ (Apenas números)</label>
                     <input
                       required
                       type="text"
+                      placeholder="Ex: 00000000000"
                       value={formData.document}
-                      onChange={(e) => setFormData({ ...formData, document: e.target.value })}
+                      onChange={(e) => setFormData({ ...formData, document: e.target.value.replace(/\D/g, '').slice(0, 14) })}
                       className="h-11 w-full rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] px-4 text-sm focus:border-[#111827] focus:outline-none focus:ring-1 focus:ring-[#111827]"
                     />
                   </div>
@@ -304,7 +331,7 @@ export const Customers: React.FC = () => {
                   </button>
                   <button
                     type="submit"
-                    disabled={saving}
+                    disabled={saving || profileLoading}
                     className="rounded-xl bg-[#111827] px-8 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[#111827]/20 hover:bg-black disabled:opacity-50"
                   >
                     {saving ? 'Salvando...' : 'Salvar Cliente'}

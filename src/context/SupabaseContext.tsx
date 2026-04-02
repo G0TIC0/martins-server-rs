@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { withRetry } from '../lib/supabase-retry';
 import { User } from '@supabase/supabase-js';
 import { UserProfile, UserRole } from '../types';
 
@@ -42,46 +43,70 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const fetchProfile = async (userId: string) => {
       try {
         console.log('[SupabaseContext] Fetching profile for:', userId);
-        const { data, error } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', userId)
-          .single();
+        const { data, error } = await withRetry(async () => 
+          await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', userId)
+            .single()
+        ) as { data: any | null; error: any };
 
         if (error) {
+          if (error.code === 'PGRST116') {
+            console.warn('[SupabaseContext] Profile not found, creating default...');
+            const { data: newData, error: insertError } = await withRetry(async () => 
+              await supabase
+                .from('profiles')
+                .insert({
+                  id: userId,
+                  email: userRef.current?.email || '',
+                  display_name: userRef.current?.user_metadata?.display_name || userRef.current?.email?.split('@')[0] || 'Usuário',
+                  role: 'sales'
+                })
+                .select()
+                .single()
+            ) as { data: any | null; error: any };
+
+            if (insertError) {
+              console.error('[SupabaseContext] Error creating profile:', insertError);
+              return null;
+            }
+            return mapProfileData(newData);
+          }
           console.error('[SupabaseContext] Error fetching profile:', error);
           return null;
         }
 
-        const mappedProfile = {
-          uid: data.id,
-          email: data.email,
-          displayName: data.display_name || '',
-          photoURL: data.photo_url || '',
-          role: data.role as UserRole,
-          cpf: data.cpf,
-          phone: data.phone,
-          createdAt: data.created_at,
-        } as UserProfile;
-
-        return mappedProfile;
+        return mapProfileData(data);
       } catch (err) {
         console.error('[SupabaseContext] Unexpected error in fetchProfile:', err);
         return null;
       }
     };
 
+    const mapProfileData = (data: any): UserProfile => {
+      return {
+        uid: data.id,
+        email: data.email,
+        displayName: data.display_name || '',
+        photoURL: data.photo_url || '',
+        role: data.role as UserRole,
+        cpf: data.cpf,
+        phone: data.phone,
+        createdAt: data.created_at,
+      } as UserProfile;
+    };
+
     const initializeAuth = async () => {
       try {
         console.log('[SupabaseContext] Initializing auth...');
         
-        // Listen for changes on auth state - this also handles the initial session in v2
+        // Listen for changes on auth state
         const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
           console.log('[SupabaseContext] Auth event:', event);
           const currentUser = session?.user ?? null;
           
           if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
-            // Only update if user ID changed or we don't have a profile yet
             if (currentUser?.id !== userRef.current?.id || (!profileRef.current && currentUser)) {
               userRef.current = currentUser;
               setUser(currentUser);
@@ -98,7 +123,10 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             setProfile(null);
           }
           
-          setLoading(false);
+          // Only stop loading if we have a user AND a profile (or no user at all)
+          if (!currentUser || profileRef.current || event === 'SIGNED_OUT') {
+            setLoading(false);
+          }
         });
 
         return subscription;
@@ -114,11 +142,13 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       authSubscription = sub;
     });
 
-    // Safety timeout to ensure loading is cleared
+    // Safety timeout to ensure loading is cleared eventually
     const timeoutId = setTimeout(() => {
-      console.log('[SupabaseContext] Safety timeout triggered.');
-      setLoading(false);
-    }, 6000);
+      if (loading) {
+        console.warn('[SupabaseContext] Safety timeout triggered. Current user:', userRef.current?.id, 'Profile:', !!profileRef.current);
+        setLoading(false);
+      }
+    }, 15000);
 
     return () => {
       if (authSubscription) {

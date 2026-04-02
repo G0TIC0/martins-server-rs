@@ -7,6 +7,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatCurrency, mapItem, mapNcm } from '../lib/utils';
 import { suggestServiceDescription } from '../services/geminiService';
 
+import { withRetry } from '../lib/supabase-retry';
+
 export const Items: React.FC = () => {
   const { isManager, profile } = useSupabase();
   const [items, setItems] = useState<Item[]>([]);
@@ -44,14 +46,16 @@ export const Items: React.FC = () => {
 
   const fetchNcms = async () => {
     try {
-      const { data, error } = await supabase
-        .from('ncms')
-        .select('*')
-        .order('code', { ascending: true });
+      const { data, error } = await withRetry(async () => 
+        await supabase
+          .from('ncms')
+          .select('*')
+          .order('code', { ascending: true })
+      ) as { data: any[] | null; error: any };
 
       if (error) throw error;
       const mappedData = (data || []).map(mapNcm);
-      setNcms(mappedData);
+      setNcms(mappedData as Ncm[]);
     } catch (error) {
       console.error('Error fetching NCMs:', error);
     }
@@ -59,14 +63,16 @@ export const Items: React.FC = () => {
 
   const fetchItems = async () => {
     try {
-      const { data, error } = await supabase
-        .from('items')
-        .select('*')
-        .order('name', { ascending: true });
+      const { data, error } = await withRetry(async () => 
+        await supabase
+          .from('items')
+          .select('*')
+          .order('name', { ascending: true })
+      ) as { data: any[] | null; error: any };
 
       if (error) throw error;
       const mappedData = (data || []).map(mapItem);
-      setItems(mappedData);
+      setItems(mappedData as Item[]);
     } catch (error) {
       console.error('Error fetching items:', error);
     } finally {
@@ -79,71 +85,66 @@ export const Items: React.FC = () => {
     if (!isManager) return;
     setSaving(true);
 
-    const performSave = async (retryCount = 0): Promise<void> => {
-      try {
-        // Save or update NCM in the ncms collection
-        if (formData.ncm && formData.ncmDescription) {
-          const { error: ncmError } = await supabase
+    try {
+      // Save or update NCM in the ncms collection
+      if (formData.ncm && formData.ncmDescription) {
+        const { error: ncmError } = await withRetry(async () => 
+          await supabase
             .from('ncms')
             .upsert({
               code: formData.ncm,
               description: formData.ncmDescription,
               updated_at: new Date().toISOString(),
-            }, { onConflict: 'code' });
-          
-          if (ncmError) throw ncmError;
-          fetchNcms();
-        }
+            }, { onConflict: 'code' })
+        ) as { error: any };
+        
+        if (ncmError) throw ncmError;
+        fetchNcms();
+      }
 
-        const itemData = {
-          name: formData.name,
-          description: formData.description,
-          type: formData.type,
-          base_price: formData.basePrice,
-          unit: formData.unit,
-          active: formData.active,
-          ncm: formData.ncm,
-          ncm_description: formData.ncmDescription,
-          fci: formData.fci,
-          part_codes: formData.partCodes,
-          observations: formData.observations,
-          updated_at: new Date().toISOString(),
-        };
+      const itemData = {
+        name: formData.name,
+        description: formData.description,
+        type: formData.type,
+        base_price: formData.basePrice,
+        unit: formData.unit,
+        active: formData.active,
+        ncm: formData.ncm,
+        ncm_description: formData.ncmDescription,
+        fci: formData.fci,
+        part_codes: formData.partCodes,
+        observations: formData.observations,
+        updated_at: new Date().toISOString(),
+      };
 
-        if (editingId) {
-          const { error } = await supabase
+      if (editingId) {
+        const { error } = await withRetry(async () => 
+          await supabase
             .from('items')
             .update(itemData)
-            .eq('id', editingId);
-          if (error) throw error;
-        } else {
-          const { error } = await supabase
+            .eq('id', editingId)
+        ) as { error: any };
+        if (error) throw error;
+      } else {
+        const { error } = await withRetry(async () => 
+          await supabase
             .from('items')
             .insert({
               ...itemData,
               created_by: profile?.uid,
-            });
-          if (error) throw error;
-        }
-        resetForm();
-        fetchItems();
-        setIsModalOpen(false);
-      } catch (error: any) {
-        // Handle the specific "stolen lock" error by retrying once after a short delay
-        if (error.message?.includes('stole it') && retryCount < 2) {
-          console.warn(`[Items] Auth lock stolen, retrying save (attempt ${retryCount + 1})...`);
-          await new Promise(resolve => setTimeout(resolve, 500));
-          return performSave(retryCount + 1);
-        }
-        
-        console.error('Error saving item:', error);
-        alert(`Erro ao salvar item: ${error.message}`);
-      } finally {
-        setSaving(false);
+            })
+        ) as { error: any };
+        if (error) throw error;
       }
-    };
-
-    await performSave();
+      resetForm();
+      fetchItems();
+      setIsModalOpen(false);
+    } catch (error: any) {
+      console.error('Error saving item:', error);
+      alert(`Erro ao salvar item: ${error.message}`);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const resetForm = () => {

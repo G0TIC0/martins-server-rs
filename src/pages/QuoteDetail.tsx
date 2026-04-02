@@ -11,6 +11,8 @@ import { reviewQuoteItems, generateCommercialText } from '../services/geminiServ
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
+import { withRetry } from '../lib/supabase-retry';
+
 export const QuoteDetail: React.FC = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -48,19 +50,19 @@ export const QuoteDetail: React.FC = () => {
     const fetchData = async () => {
       try {
         const [custRes, itemRes, settingsRes] = await Promise.all([
-          supabase.from('customers').select('*').order('name'),
-          supabase.from('items').select('*').order('name'),
-          supabase.from('company_settings').select('*').eq('id', 'company').single(),
+          withRetry(async () => await supabase.from('customers').select('*').order('name')) as Promise<{ data: any[] | null; error: any }>,
+          withRetry(async () => await supabase.from('items').select('*').order('name')) as Promise<{ data: any[] | null; error: any }>,
+          withRetry(async () => await supabase.from('company_settings').select('*').eq('id', 'company').single()) as Promise<{ data: any | null; error: any }>,
         ]);
 
         if (custRes.error) throw custRes.error;
         if (itemRes.error) throw itemRes.error;
 
-        setCustomers((custRes.data || []).map(mapCustomer));
-        setCatalogItems((itemRes.data || []).map(mapItem));
+        setCustomers((custRes.data || []).map(mapCustomer) as Customer[]);
+        setCatalogItems((itemRes.data || []).map(mapItem) as Item[]);
         
         if (settingsRes.data) {
-          const data = settingsRes.data;
+          const data = settingsRes.data as any;
           setCompanySettings({
             id: data.id,
             name: data.name,
@@ -74,15 +76,17 @@ export const QuoteDetail: React.FC = () => {
         }
 
         if (id && id !== 'new') {
-          const { data: quoteData, error: quoteError } = await supabase
-            .from('quotes')
-            .select('*')
-            .eq('id', id)
-            .single();
+          const { data: quoteData, error: quoteError } = await withRetry(async () => 
+            await supabase
+              .from('quotes')
+              .select('*')
+              .eq('id', id)
+              .single()
+          ) as { data: any | null; error: any };
           
           if (quoteError) throw quoteError;
           if (quoteData) {
-            setQuote(mapQuote(quoteData));
+            setQuote(mapQuote(quoteData as any));
           }
         }
       } catch (error) {
@@ -238,27 +242,31 @@ export const QuoteDetail: React.FC = () => {
           userRole: profile?.role || 'admin',
         };
         
-        const { data: newQuote, error } = await supabase
-          .from('quotes')
-          .insert({
-            ...data,
-            status: 'received',
-            timeline: [initialEvent],
-            created_by: profile?.uid,
-            created_at: new Date().toISOString(),
-          })
-          .select()
-          .single();
+        const { data: newQuote, error } = await withRetry(async () => 
+          await supabase
+            .from('quotes')
+            .insert({
+              ...data,
+              status: 'received',
+              timeline: [initialEvent],
+              created_by: profile?.uid,
+              created_at: new Date().toISOString(),
+            })
+            .select()
+            .single()
+        ) as { data: any | null; error: any };
 
         if (error) throw error;
         if (newQuote) {
-          navigate(`/quotes/${newQuote.id}`, { replace: true });
+          navigate(`/quotes/${(newQuote as any).id}`, { replace: true });
         }
       } else {
-        const { error } = await supabase
-          .from('quotes')
-          .update(data)
-          .eq('id', id!);
+        const { error } = await withRetry(async () => 
+          await supabase
+            .from('quotes')
+            .update(data)
+            .eq('id', id!)
+        ) as { error: any };
         
         if (error) throw error;
       }

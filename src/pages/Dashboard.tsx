@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Quote, QuoteStatus } from '../types';
 import { cn, formatCurrency, formatDateTime, mapQuote } from '../lib/utils';
+import { withRetry } from '../lib/supabase-retry';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from 'recharts';
 import { TrendingUp, Users, FileText, CheckCircle, Clock, AlertCircle, ArrowUpRight, ArrowDownRight, X } from 'lucide-react';
 import { motion } from 'motion/react';
@@ -16,16 +17,18 @@ export const Dashboard: React.FC = () => {
     const fetchQuotes = async () => {
       try {
         console.log('[Dashboard] Fetching quotes...');
-        const { data, error } = await supabase
-          .from('quotes')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(100);
+        const { data, error } = await withRetry(async () => 
+          await supabase
+            .from('quotes')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(100)
+        ) as { data: any[] | null; error: any };
 
         if (error) throw error;
 
         const mappedData = (data || []).map(mapQuote);
-        setQuotes(mappedData);
+        setQuotes(mappedData as Quote[]);
       } catch (error) {
         console.error('[Dashboard] Error fetching quotes:', error);
       } finally {
@@ -145,7 +148,7 @@ export const Dashboard: React.FC = () => {
               <option>Este ano</option>
             </select>
           </div>
-          <div className="h-80 w-full">
+          <div className="w-full min-w-0" style={{ height: 320 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={statusData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F3F4F6" />
@@ -168,7 +171,7 @@ export const Dashboard: React.FC = () => {
         {/* Status Distribution */}
         <div className="rounded-2xl border border-[#E5E7EB] bg-white p-6 shadow-sm">
           <h2 className="mb-6 text-lg font-bold text-[#111827]">Distribuição de Status</h2>
-          <div className="h-64 w-full">
+          <div className="w-full min-w-0" style={{ height: 256 }}>
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie

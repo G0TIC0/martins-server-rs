@@ -7,6 +7,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatCurrency, formatDateTime, generateQuoteNumber, mapQuote } from '../lib/utils';
 import { useNavigate } from 'react-router-dom';
 
+import { withRetry } from '../lib/supabase-retry';
+
 export const Quotes: React.FC = () => {
   const navigate = useNavigate();
   const { isAdmin, isSales, isCustomer, profile } = useSupabase();
@@ -22,18 +24,18 @@ export const Quotes: React.FC = () => {
 
   const fetchQuotes = async () => {
     try {
-      let query = supabase.from('quotes').select('*').order('created_at', { ascending: false });
-
-      if (isCustomer && profile) {
-        query = query.eq('customer_id', profile.uid);
-      }
-
-      const { data, error } = await query;
+      const { data, error } = await withRetry(async () => {
+        let query = supabase.from('quotes').select('*').order('created_at', { ascending: false });
+        if (isCustomer && profile) {
+          query = query.eq('customer_id', profile.uid);
+        }
+        return await query;
+      }) as { data: any[] | null; error: any };
 
       if (error) throw error;
 
       const mappedData = (data || []).map(mapQuote);
-      setQuotes(mappedData);
+      setQuotes(mappedData as Quote[]);
     } catch (error) {
       console.error('Error fetching quotes:', error);
     } finally {
