@@ -10,7 +10,6 @@ import { cn, formatCurrency, generateQuoteNumber } from '../lib/utils';
 import { reviewQuoteItems, generateCommercialText } from '../services/geminiService';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { toast } from 'sonner';
 
 import { withRetry } from '../lib/supabase-retry';
 
@@ -53,7 +52,7 @@ export const QuoteDetail: React.FC = () => {
         const [custRes, itemRes, settingsRes] = await Promise.all([
           withRetry(async () => await supabase.from('customers').select('*').order('name')) as Promise<{ data: any[] | null; error: any }>,
           withRetry(async () => await supabase.from('items').select('*').order('name')) as Promise<{ data: any[] | null; error: any }>,
-          withRetry(async () => await supabase.from('company_settings').select('*').eq('id', 'company').single()) as Promise<{ data: any | null; error: any }>,
+          withRetry(async () => await supabase.from('company_settings').select('*').limit(1).single()) as Promise<{ data: any | null; error: any }>,
         ]);
 
         if (custRes.error) throw custRes.error;
@@ -80,7 +79,7 @@ export const QuoteDetail: React.FC = () => {
           const { data: quoteData, error: quoteError } = await withRetry(async () => 
             await supabase
               .from('quotes')
-              .select('*')
+              .select('*, quote_items(*), timeline_events(*)')
               .eq('id', id)
               .single()
           ) as { data: any | null; error: any };
@@ -125,9 +124,9 @@ export const QuoteDetail: React.FC = () => {
       type: catalogItem.type,
       quantity: 1,
       costPrice: catalogItem.costPrice || 0,
-      unitPrice: catalogItem.basePrice,
+      unitPrice: catalogItem.basePrice || 0,
       discount: 0,
-      total: catalogItem.basePrice,
+      total: catalogItem.basePrice || 0,
     };
     const updatedItems = [...(quote.items || []), newItem];
     calculateTotals(updatedItems);
@@ -187,142 +186,171 @@ export const QuoteDetail: React.FC = () => {
     const updatedTimeline = [...(quote.timeline || []), event];
     
     try {
-      const { error } = await withRetry(async () => 
+      const { error: statusError } = await withRetry(async () => 
         await supabase
           .from('quotes')
           .update({
             status: newStatus,
-            timeline: updatedTimeline,
             updated_at: new Date().toISOString(),
           })
           .eq('id', id)
       ) as { error: any };
 
-      if (error) throw error;
+      if (statusError) throw statusError;
+
+      const { error: timelineError } = await withRetry(async () => 
+        await supabase
+          .from('timeline_events')
+          .insert({
+            quote_id: id,
+            status: event.status,
+            timestamp: event.timestamp,
+            user_id: event.userId || null,
+            user_name: event.userName,
+            user_role: event.userRole,
+            notes: event.notes,
+          })
+      ) as { error: any };
+
+      if (timelineError) throw timelineError;
+
       setQuote(prev => ({ ...prev, status: newStatus, timeline: updatedTimeline }));
-      toast.success(`Status atualizado para: ${newStatus}`);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error updating status:', error);
-      toast.error(`Erro ao atualizar status: ${error.message}`);
+      alert('Erro ao atualizar status.');
     }
   };
 
   const handleSave = async () => {
     if (!quote.customerId) {
-      toast.error('Selecione um cliente.');
+      alert('Selecione um cliente.');
       return;
     }
     setSaving(true);
-    const saveToastId = toast.loading('Salvando orçamento...');
-    
     try {
       const quoteData = {
-        quote_number: quote.quoteNumber,
-        title: quote.title,
+        quote_number: quote.quoteNumber || generateQuoteNumber(),
+        title: quote.title || 'Sem Título',
         customer_id: quote.customerId,
-        customer_name: quote.customerName,
-        status: quote.status,
+        customer_name: quote.customerName || 'Cliente não identificado',
+        status: quote.status || 'received',
         classification: quote.classification,
-        vehicle_plate: quote.vehiclePlate,
-        vehicle_model: quote.vehicleModel,
-        observations: quote.observations,
-        timeline: quote.timeline,
-        subtotal: quote.subtotal,
-        discount_total: quote.discountTotal,
-        tax_total: quote.taxTotal,
-        shipping_fee: quote.shippingFee,
-        urgency_fee: quote.urgencyFee,
-        grand_total: quote.grandTotal,
-        valid_until: quote.validUntil,
-        notes: quote.notes,
-        terms: quote.terms,
+        vehicle_plate: quote.vehiclePlate || '',
+        vehicle_model: quote.vehicleModel || '',
+        observations: quote.observations || '',
+        subtotal: Number(quote.subtotal) || 0,
+        discount_total: Number(quote.discountTotal) || 0,
+        tax_total: Number(quote.taxTotal) || 0,
+        shipping_fee: Number(quote.shippingFee) || 0,
+        urgency_fee: Number(quote.urgencyFee) || 0,
+        grand_total: Number(quote.grandTotal) || 0,
+        valid_until: quote.validUntil || new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString(),
+        notes: quote.notes || '',
+        terms: quote.terms || '',
         updated_at: new Date().toISOString(),
       };
 
       let quoteId = id;
 
       if (id === 'new') {
-        const initialEvent: TimelineEvent = {
-          status: 'received',
-          timestamp: new Date().toISOString(),
-          userId: profile?.uid || '',
-          userName: profile?.displayName || 'Sistema',
-          userRole: profile?.role || 'admin',
-        };
-        
-        const { data: newQuote, error } = await withRetry(async () => 
+        const { data: newQuote, error: quoteError } = await withRetry(async () => 
           await supabase
             .from('quotes')
             .insert({
               ...quoteData,
               status: 'received',
-              timeline: [initialEvent],
-              created_by: profile?.uid,
+              created_by: profile?.uid || null,
               created_at: new Date().toISOString(),
             })
             .select()
             .single()
         ) as { data: any | null; error: any };
 
-        if (error) throw error;
-        if (newQuote) {
-          quoteId = (newQuote as any).id;
-        }
+        if (quoteError) throw new Error(`Erro ao criar orçamento: ${quoteError.message}`);
+        if (!newQuote) throw new Error('Falha ao criar orçamento: Nenhum dado retornado.');
+        quoteId = newQuote.id;
+
+        const initialEvent = {
+          quote_id: quoteId,
+          status: 'received',
+          timestamp: new Date().toISOString(),
+          user_id: profile?.uid || null,
+          user_name: profile?.displayName || 'Sistema',
+          user_role: profile?.role || 'admin',
+        };
+        
+        const { error: eventError } = await withRetry(async () => 
+          await supabase.from('timeline_events').insert(initialEvent)
+        ) as { error: any };
+
+        if (eventError) console.warn('Erro ao criar evento inicial:', eventError);
       } else {
-        const { error } = await withRetry(async () => 
+        const { error: quoteError } = await withRetry(async () => 
           await supabase
             .from('quotes')
             .update(quoteData)
             .eq('id', id!)
         ) as { error: any };
         
-        if (error) throw error;
+        if (quoteError) throw new Error(`Erro ao atualizar orçamento: ${quoteError.message}`);
       }
 
-      // Save Items separately (Architecture Mismatch Fix)
-      if (quoteId) {
-        // Delete existing items first if updating
-        if (id !== 'new') {
-          await withRetry(async () => 
-            await supabase.from('quote_items').delete().eq('quote_id', quoteId!)
-          );
-        }
+      // Save Items (Delete existing and insert new)
+      if (quoteId && quoteId !== 'new') {
+        const { error: deleteError } = await withRetry(async () => 
+          await supabase.from('quote_items').delete().eq('quote_id', quoteId!)
+        ) as { error: any };
 
-        // Insert new items
+        if (deleteError) throw new Error(`Erro ao limpar itens antigos: ${deleteError.message}`);
+
         if (quote.items && quote.items.length > 0) {
           const itemsToInsert = quote.items.map(item => ({
             quote_id: quoteId,
             item_id: item.itemId,
-            item_code: item.itemCode,
-            name: item.name,
-            ncm: item.ncm,
-            type: item.type,
-            quantity: item.quantity,
-            cost_price: item.costPrice,
-            unit_price: item.unitPrice,
-            discount: item.discount,
-            total: item.total
+            item_code: item.itemCode || '',
+            name: item.name || 'Item sem nome',
+            ncm: item.ncm || '',
+            type: item.type || 'product',
+            quantity: Number(item.quantity) || 0,
+            cost_price: Number(item.costPrice) || 0,
+            unit_price: Number(item.unitPrice) || 0,
+            discount: Number(item.discount) || 0,
+            total: Number(item.total) || 0,
           }));
 
           const { error: itemsError } = await withRetry(async () => 
             await supabase.from('quote_items').insert(itemsToInsert)
           ) as { error: any };
 
-          if (itemsError) throw itemsError;
+          if (itemsError) throw new Error(`Erro ao salvar novos itens: ${itemsError.message}`);
         }
       }
       
-      // Generate PDF after saving
-      await generatePDF();
+      // Generate PDF after saving but BEFORE navigation
+      try {
+        await generatePDF();
+      } catch (pdfError) {
+        console.error('Error generating PDF:', pdfError);
+        alert('Orçamento salvo, mas houve um erro ao gerar o PDF. Você pode tentar baixar o PDF novamente na lista de orçamentos.');
+      }
       
-      toast.success('Orçamento salvo e PDF gerado com sucesso!', { id: saveToastId });
-      
+      // If it was a new quote, navigate to it
       if (id === 'new' && quoteId) {
         navigate(`/quotes/${quoteId}`, { replace: true });
+      } else {
+        // Refresh data if not navigating
+        const { data: quoteData } = await supabase
+          .from('quotes')
+          .select('*, quote_items(*), timeline_events(*)')
+          .eq('id', quoteId!)
+          .single();
+        if (quoteData) setQuote(mapQuote(quoteData));
       }
+      
+      alert('Orçamento salvo com sucesso!');
     } catch (error: any) {
       console.error('Error saving quote:', error);
-      toast.error(`Erro ao salvar orçamento: ${error.message}`, { id: saveToastId });
+      alert(`Erro ao salvar orçamento: ${error.message}`);
     } finally {
       setSaving(false);
     }
@@ -364,13 +392,13 @@ export const QuoteDetail: React.FC = () => {
 
     // Company Logo
     if (companySettings?.logoUrl) {
-      const base64Logo = await getBase64FromUrl(companySettings.logoUrl);
-      if (base64Logo) {
-        try {
-          doc.addImage(base64Logo, 'PNG', 20, 10, 30, 30);
-        } catch (e) {
-          console.warn('Could not add logo to PDF:', e);
+      try {
+        const base64Logo = await getBase64FromUrl(companySettings.logoUrl);
+        if (base64Logo) {
+          doc.addImage(base64Logo, 'JPEG', 20, 10, 30, 30);
         }
+      } catch (e) {
+        console.warn('Could not add logo to PDF:', e);
       }
     }
 
@@ -452,7 +480,7 @@ export const QuoteDetail: React.FC = () => {
     autoTable(doc, {
       startY: 110,
       head: [['Cód', 'Item', 'NCM', 'Tipo', 'Qtd', 'Unitário', 'Total']],
-      body: quote.items?.map(item => {
+      body: (quote.items || []).map(item => {
         // Try to find missing data in catalog if needed
         const catalogItem = catalogItems.find(i => i.id === item.itemId);
         const itemCode = item.itemCode || (catalogItem?.partCodes?.[0] || '');
@@ -465,8 +493,8 @@ export const QuoteDetail: React.FC = () => {
           ncm,
           typeLabel,
           item.quantity,
-          formatCurrency(item.unitPrice),
-          formatCurrency(item.total)
+          formatCurrency(item.unitPrice || 0),
+          formatCurrency(item.total || 0)
         ];
       }),
       theme: 'striped',
@@ -478,7 +506,8 @@ export const QuoteDetail: React.FC = () => {
     // Totals
     doc.setFontSize(12);
     doc.setFont('helvetica', 'bold');
-    doc.text(`TOTAL: ${formatCurrency(quote.grandTotal!)}`, 140, finalY);
+    const totalValue = quote.grandTotal || 0;
+    doc.text(`TOTAL: ${formatCurrency(totalValue)}`, 140, finalY);
 
     // Footer
     doc.setFontSize(10);
