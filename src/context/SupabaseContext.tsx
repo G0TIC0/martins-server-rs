@@ -71,61 +71,47 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
     };
 
-    const initialize = async () => {
+    const initializeAuth = async () => {
       try {
         console.log('[SupabaseContext] Initializing auth...');
-        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
         
-        if (sessionError) {
-          console.error('[SupabaseContext] Session error:', sessionError);
-        }
+        // Listen for changes on auth state - this also handles the initial session in v2
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+          console.log('[SupabaseContext] Auth event:', event);
+          const currentUser = session?.user ?? null;
+          
+          if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+            // Only update if user ID changed or we don't have a profile yet
+            if (currentUser?.id !== userRef.current?.id || (!profileRef.current && currentUser)) {
+              userRef.current = currentUser;
+              setUser(currentUser);
+              if (currentUser) {
+                const userProfile = await fetchProfile(currentUser.id);
+                profileRef.current = userProfile;
+                setProfile(userProfile);
+              }
+            }
+          } else if (event === 'SIGNED_OUT') {
+            userRef.current = null;
+            profileRef.current = null;
+            setUser(null);
+            setProfile(null);
+          }
+          
+          setLoading(false);
+        });
 
-        const currentUser = session?.user ?? null;
-        userRef.current = currentUser;
-        setUser(currentUser);
-
-        if (currentUser) {
-          const userProfile = await fetchProfile(currentUser.id);
-          profileRef.current = userProfile;
-          setProfile(userProfile);
-        } else {
-          profileRef.current = null;
-          setProfile(null);
-        }
+        return subscription;
       } catch (err) {
         console.error('[SupabaseContext] Initialization error:', err);
-      } finally {
-        console.log('[SupabaseContext] Initialization complete.');
         setLoading(false);
+        return null;
       }
     };
 
-    initialize();
-
-    // Listen for changes on auth state
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log('[SupabaseContext] Auth event:', event);
-      const currentUser = session?.user ?? null;
-      
-      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
-        // Only update if user ID changed or we don't have a profile yet (and we haven't tried recently)
-        if (currentUser?.id !== userRef.current?.id || (!profileRef.current && currentUser)) {
-          userRef.current = currentUser;
-          setUser(currentUser);
-          if (currentUser) {
-            const userProfile = await fetchProfile(currentUser.id);
-            profileRef.current = userProfile;
-            setProfile(userProfile);
-          }
-        }
-      } else if (event === 'SIGNED_OUT') {
-        userRef.current = null;
-        profileRef.current = null;
-        setUser(null);
-        setProfile(null);
-      }
-      
-      setLoading(false);
+    let authSubscription: any = null;
+    initializeAuth().then(sub => {
+      authSubscription = sub;
     });
 
     // Safety timeout to ensure loading is cleared
@@ -135,7 +121,9 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }, 6000);
 
     return () => {
-      subscription.unsubscribe();
+      if (authSubscription) {
+        authSubscription.unsubscribe();
+      }
       clearTimeout(timeoutId);
     };
   }, []);

@@ -10,6 +10,7 @@ export const Customers: React.FC = () => {
   const { profile } = useSupabase();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -47,33 +48,49 @@ export const Customers: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      if (editingCustomer) {
-        const { error } = await supabase
-          .from('customers')
-          .update({
-            ...formData,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', editingCustomer.id);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase
-          .from('customers')
-          .insert({
-            ...formData,
-            created_by: profile?.uid,
-          });
-        if (error) throw error;
+    setSaving(true);
+    
+    const performSave = async (retryCount = 0): Promise<void> => {
+      try {
+        if (editingCustomer) {
+          const { error } = await supabase
+            .from('customers')
+            .update({
+              ...formData,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', editingCustomer.id);
+          if (error) throw error;
+        } else {
+          const { error } = await supabase
+            .from('customers')
+            .insert({
+              ...formData,
+              created_by: profile?.uid,
+            });
+          if (error) throw error;
+        }
+        
+        setIsModalOpen(false);
+        setEditingCustomer(null);
+        setFormData({ name: '', document: '', email: '', phone: '', address: '', observations: '' });
+        fetchCustomers();
+      } catch (error: any) {
+        // Handle the specific "stolen lock" error by retrying once after a short delay
+        if (error.message?.includes('stole it') && retryCount < 2) {
+          console.warn(`[Customers] Auth lock stolen, retrying save (attempt ${retryCount + 1})...`);
+          await new Promise(resolve => setTimeout(resolve, 500));
+          return performSave(retryCount + 1);
+        }
+        
+        console.error('Error saving customer:', error);
+        alert(`Erro ao salvar cliente: ${error.message || 'Verifique se o CPF/CNPJ já está cadastrado.'}`);
+      } finally {
+        setSaving(false);
       }
-      setIsModalOpen(false);
-      setEditingCustomer(null);
-      setFormData({ name: '', document: '', email: '', phone: '', address: '', observations: '' });
-      fetchCustomers();
-    } catch (error: any) {
-      console.error('Error saving customer:', error);
-      alert(`Erro ao salvar cliente: ${error.message || 'Verifique se o CPF/CNPJ já está cadastrado.'}`);
-    }
+    };
+
+    await performSave();
   };
 
   const handleEdit = (customer: Customer) => {
@@ -287,9 +304,10 @@ export const Customers: React.FC = () => {
                   </button>
                   <button
                     type="submit"
-                    className="rounded-xl bg-[#111827] px-8 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[#111827]/20 hover:bg-black"
+                    disabled={saving}
+                    className="rounded-xl bg-[#111827] px-8 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[#111827]/20 hover:bg-black disabled:opacity-50"
                   >
-                    Salvar Cliente
+                    {saving ? 'Salvando...' : 'Salvar Cliente'}
                   </button>
                 </div>
               </form>

@@ -11,6 +11,7 @@ export const Items: React.FC = () => {
   const { isManager, profile } = useSupabase();
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -76,59 +77,73 @@ export const Items: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isManager) return;
+    setSaving(true);
 
-    try {
-      // Save or update NCM in the ncms collection
-      if (formData.ncm && formData.ncmDescription) {
-        const { error: ncmError } = await supabase
-          .from('ncms')
-          .upsert({
-            code: formData.ncm,
-            description: formData.ncmDescription,
-            updated_at: new Date().toISOString(),
-          }, { onConflict: 'code' });
+    const performSave = async (retryCount = 0): Promise<void> => {
+      try {
+        // Save or update NCM in the ncms collection
+        if (formData.ncm && formData.ncmDescription) {
+          const { error: ncmError } = await supabase
+            .from('ncms')
+            .upsert({
+              code: formData.ncm,
+              description: formData.ncmDescription,
+              updated_at: new Date().toISOString(),
+            }, { onConflict: 'code' });
+          
+          if (ncmError) throw ncmError;
+          fetchNcms();
+        }
+
+        const itemData = {
+          name: formData.name,
+          description: formData.description,
+          type: formData.type,
+          base_price: formData.basePrice,
+          unit: formData.unit,
+          active: formData.active,
+          ncm: formData.ncm,
+          ncm_description: formData.ncmDescription,
+          fci: formData.fci,
+          part_codes: formData.partCodes,
+          observations: formData.observations,
+          updated_at: new Date().toISOString(),
+        };
+
+        if (editingId) {
+          const { error } = await supabase
+            .from('items')
+            .update(itemData)
+            .eq('id', editingId);
+          if (error) throw error;
+        } else {
+          const { error } = await supabase
+            .from('items')
+            .insert({
+              ...itemData,
+              created_by: profile?.uid,
+            });
+          if (error) throw error;
+        }
+        resetForm();
+        fetchItems();
+        setIsModalOpen(false);
+      } catch (error: any) {
+        // Handle the specific "stolen lock" error by retrying once after a short delay
+        if (error.message?.includes('stole it') && retryCount < 2) {
+          console.warn(`[Items] Auth lock stolen, retrying save (attempt ${retryCount + 1})...`);
+          await new Promise(resolve => setTimeout(resolve, 500));
+          return performSave(retryCount + 1);
+        }
         
-        if (ncmError) throw ncmError;
-        fetchNcms();
+        console.error('Error saving item:', error);
+        alert(`Erro ao salvar item: ${error.message}`);
+      } finally {
+        setSaving(false);
       }
+    };
 
-      const itemData = {
-        name: formData.name,
-        description: formData.description,
-        type: formData.type,
-        base_price: formData.basePrice,
-        unit: formData.unit,
-        active: formData.active,
-        ncm: formData.ncm,
-        ncm_description: formData.ncmDescription,
-        fci: formData.fci,
-        part_codes: formData.partCodes,
-        observations: formData.observations,
-        updated_at: new Date().toISOString(),
-      };
-
-      if (editingId) {
-        const { error } = await supabase
-          .from('items')
-          .update(itemData)
-          .eq('id', editingId);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase
-          .from('items')
-          .insert({
-            ...itemData,
-            created_by: profile?.uid,
-          });
-        if (error) throw error;
-      }
-      resetForm();
-      fetchItems();
-      setIsModalOpen(false);
-    } catch (error: any) {
-      console.error('Error saving item:', error);
-      alert(`Erro ao salvar item: ${error.message}`);
-    }
+    await performSave();
   };
 
   const resetForm = () => {
@@ -653,10 +668,11 @@ export const Items: React.FC = () => {
                     </button>
                     <button
                       type="submit"
-                      className="flex-[2] h-12 flex items-center justify-center gap-2 rounded-xl bg-[#111827] text-sm font-bold text-white shadow-lg shadow-black/20 hover:bg-black transition-all active:scale-[0.98]"
+                      disabled={saving}
+                      className="flex-[2] h-12 flex items-center justify-center gap-2 rounded-xl bg-[#111827] text-sm font-bold text-white shadow-lg shadow-black/20 hover:bg-black transition-all active:scale-[0.98] disabled:opacity-50"
                     >
                       <Save className="h-5 w-5" />
-                      {editingId ? 'Salvar Alterações' : 'Finalizar Cadastro'}
+                      {saving ? 'Salvando...' : (editingId ? 'Salvar Alterações' : 'Finalizar Cadastro')}
                     </button>
                   </div>
                 </form>
