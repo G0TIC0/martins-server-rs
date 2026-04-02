@@ -166,48 +166,69 @@ ALTER TABLE ncms ENABLE ROW LEVEL SECURITY;
 ALTER TABLE company_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
 
--- Policies (Basic examples, can be refined)
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public profiles are viewable by everyone.' AND tablename = 'profiles') THEN
-        CREATE POLICY "Public profiles are viewable by everyone." ON profiles FOR SELECT USING (true);
-    END IF;
-    
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Users can update their own profile.' AND tablename = 'profiles') THEN
-        CREATE POLICY "Users can update their own profile." ON profiles FOR UPDATE USING (auth.uid() = id);
-    END IF;
+-- Policies (Enterprise Grade RBAC)
+-- Profiles: Users can read all profiles (for collaboration) but only update their own
+CREATE POLICY "Profiles are viewable by authenticated users" ON profiles 
+  FOR SELECT USING (auth.role() = 'authenticated');
 
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Authenticated users can read all data.' AND tablename = 'customers') THEN
-        CREATE POLICY "Authenticated users can read all data." ON customers FOR SELECT USING (auth.role() = 'authenticated');
-    END IF;
+CREATE POLICY "Users can update their own profile" ON profiles 
+  FOR UPDATE USING (auth.uid() = id);
 
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Authenticated users can insert data.' AND tablename = 'customers') THEN
-        CREATE POLICY "Authenticated users can insert data." ON customers FOR INSERT WITH CHECK (auth.role() = 'authenticated');
-    END IF;
+-- Customers: Only staff can manage customers. Customers can't see other customers.
+CREATE POLICY "Staff can manage customers" ON customers
+  FOR ALL USING (
+    EXISTS (
+      SELECT 1 FROM profiles 
+      WHERE id = auth.uid() AND role IN ('admin', 'sales', 'manager', 'technician')
+    )
+  );
 
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Authenticated users can update data.' AND tablename = 'customers') THEN
-        CREATE POLICY "Authenticated users can update data." ON customers FOR UPDATE USING (auth.role() = 'authenticated');
-    END IF;
-END $$;
+-- Quotes: Staff can see all. Customers can only see their own.
+CREATE POLICY "Staff can manage all quotes" ON quotes
+  FOR ALL USING (
+    EXISTS (
+      SELECT 1 FROM profiles 
+      WHERE id = auth.uid() AND role IN ('admin', 'sales', 'manager', 'technician')
+    )
+  );
 
--- Repeat similar policies for other tables or use a more restrictive approach based on roles
--- For brevity, I'll apply a general "authenticated" policy to most tables
-DO $$
-DECLARE
-  t text;
-BEGIN
-  FOR t IN (SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name NOT IN ('profiles', 'customers')) LOOP
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = format('Authenticated users can read %I', t) AND tablename = t) THEN
-        EXECUTE format('CREATE POLICY "Authenticated users can read %I" ON %I FOR SELECT USING (auth.role() = ''authenticated'');', t, t);
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = format('Authenticated users can insert %I', t) AND tablename = t) THEN
-        EXECUTE format('CREATE POLICY "Authenticated users can insert %I" ON %I FOR INSERT WITH CHECK (auth.role() = ''authenticated'');', t, t);
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = format('Authenticated users can update %I', t) AND tablename = t) THEN
-        EXECUTE format('CREATE POLICY "Authenticated users can update %I" ON %I FOR UPDATE USING (auth.role() = ''authenticated'');', t, t);
-    END IF;
-  END LOOP;
-END $$;
+CREATE POLICY "Customers can view their own quotes" ON quotes
+  FOR SELECT USING (
+    auth.uid() = customer_id OR 
+    EXISTS (
+      SELECT 1 FROM profiles 
+      WHERE id = auth.uid() AND role IN ('admin', 'sales', 'manager', 'technician')
+    )
+  );
+
+-- Items (Catalog): Everyone authenticated can read. Only admin/manager can modify.
+CREATE POLICY "Authenticated users can read catalog" ON items
+  FOR SELECT USING (auth.role() = 'authenticated');
+
+CREATE POLICY "Admin and Manager can manage catalog" ON items
+  FOR ALL USING (
+    EXISTS (
+      SELECT 1 FROM profiles 
+      WHERE id = auth.uid() AND role IN ('admin', 'manager')
+    )
+  );
+
+-- Apply similar logic to other tables
+CREATE POLICY "Staff can manage quote items" ON quote_items
+  FOR ALL USING (
+    EXISTS (
+      SELECT 1 FROM profiles 
+      WHERE id = auth.uid() AND role IN ('admin', 'sales', 'manager', 'technician')
+    )
+  );
+
+CREATE POLICY "Staff can manage timeline events" ON timeline_events
+  FOR ALL USING (
+    EXISTS (
+      SELECT 1 FROM profiles 
+      WHERE id = auth.uid() AND role IN ('admin', 'sales', 'manager', 'technician')
+    )
+  );
 
 -- Trigger to create profile on signup
 CREATE OR REPLACE FUNCTION public.handle_new_user()

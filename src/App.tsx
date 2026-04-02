@@ -10,6 +10,8 @@ import { QuoteDetail } from './pages/QuoteDetail';
 import { Settings } from './pages/Settings';
 import { Login } from './pages/Login';
 
+import { Toaster } from 'sonner';
+
 const ProtectedLayout: React.FC = () => {
   const { user, loading } = useSupabase();
 
@@ -35,6 +37,7 @@ const ProtectedLayout: React.FC = () => {
 export default function App() {
   return (
     <SupabaseProvider>
+      <Toaster position="top-right" expand={true} richColors />
       <Router>
         <Routes>
           <Route path="/login" element={<Login />} />

@@ -27,6 +27,7 @@ export const Items: React.FC = () => {
     name: '',
     description: '',
     type: 'product' as ItemType,
+    costPrice: 0,
     basePrice: 0,
     unit: 'un',
     active: true,
@@ -106,6 +107,7 @@ export const Items: React.FC = () => {
         name: formData.name,
         description: formData.description,
         type: formData.type,
+        cost_price: formData.costPrice,
         base_price: formData.basePrice,
         unit: formData.unit,
         active: formData.active,
@@ -129,10 +131,7 @@ export const Items: React.FC = () => {
         const { error } = await withRetry(async () => 
           await supabase
             .from('items')
-            .insert({
-              ...itemData,
-              created_by: profile?.uid,
-            })
+            .insert(itemData)
         ) as { error: any };
         if (error) throw error;
       }
@@ -153,6 +152,7 @@ export const Items: React.FC = () => {
       name: '',
       description: '',
       type: 'product',
+      costPrice: 0,
       basePrice: 0,
       unit: 'un',
       active: true,
@@ -176,6 +176,7 @@ export const Items: React.FC = () => {
       name: item.name,
       description: item.description || '',
       type: item.type,
+      costPrice: item.costPrice,
       basePrice: item.basePrice,
       unit: item.unit,
       active: item.active,
@@ -477,7 +478,22 @@ export const Items: React.FC = () => {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-sm font-bold text-[#111827]">Valor Unitário (R$)</label>
+                      <label className="text-sm font-bold text-[#111827]">Preço de Custo (R$)</label>
+                      <div className="relative">
+                        <DollarSign className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9CA3AF]" />
+                        <input
+                          type="number"
+                          step="0.01"
+                          placeholder="0,00"
+                          value={formData.costPrice || ''}
+                          onChange={(e) => setFormData({ ...formData, costPrice: parseFloat(e.target.value) || 0 })}
+                          className="h-12 w-full rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] pl-10 pr-4 text-sm focus:border-[#111827] focus:bg-white focus:outline-none transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-sm font-bold text-[#111827]">Preço de Venda (R$)</label>
                       <div className="relative">
                         <DollarSign className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9CA3AF]" />
                         <input

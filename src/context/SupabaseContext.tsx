@@ -30,7 +30,13 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const userRef = React.useRef<User | null>(null);
   const profileRef = React.useRef<UserProfile | null>(null);
 
+  const initialized = React.useRef(false);
+  const fetchingProfile = React.useRef<string | null>(null);
+
   useEffect(() => {
+    if (initialized.current) return;
+    initialized.current = true;
+
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
     const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
@@ -41,6 +47,12 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
 
     const fetchProfile = async (userId: string) => {
+      if (fetchingProfile.current === userId) {
+        console.log('[SupabaseContext] Already fetching profile for:', userId);
+        return profileRef.current;
+      }
+      
+      fetchingProfile.current = userId;
       try {
         console.log('[SupabaseContext] Fetching profile for:', userId);
         const { data, error } = await withRetry(async () => 
@@ -71,16 +83,20 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               console.error('[SupabaseContext] Error creating profile:', insertError);
               return null;
             }
+            console.log('[SupabaseContext] Profile created successfully.');
             return mapProfileData(newData);
           }
           console.error('[SupabaseContext] Error fetching profile:', error);
           return null;
         }
 
+        console.log('[SupabaseContext] Profile fetched successfully.');
         return mapProfileData(data);
       } catch (err) {
         console.error('[SupabaseContext] Unexpected error in fetchProfile:', err);
         return null;
+      } finally {
+        fetchingProfile.current = null;
       }
     };
 
@@ -101,30 +117,46 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       try {
         console.log('[SupabaseContext] Initializing auth...');
         
+        // Get initial session explicitly to avoid waiting for onAuthStateChange
+        const { data: { session } } = await supabase.auth.getSession();
+        const initialUser = session?.user ?? null;
+        
+        if (initialUser) {
+          console.log('[SupabaseContext] Initial session found:', initialUser.id);
+          userRef.current = initialUser;
+          setUser(initialUser);
+          const userProfile = await fetchProfile(initialUser.id);
+          profileRef.current = userProfile;
+          setProfile(userProfile);
+        }
+        
+        setLoading(false);
+
         // Listen for changes on auth state
         const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
           console.log('[SupabaseContext] Auth event:', event);
           const currentUser = session?.user ?? null;
           
-          if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
-            if (currentUser?.id !== userRef.current?.id || (!profileRef.current && currentUser)) {
-              userRef.current = currentUser;
-              setUser(currentUser);
-              if (currentUser) {
-                const userProfile = await fetchProfile(currentUser.id);
-                profileRef.current = userProfile;
-                setProfile(userProfile);
+          try {
+            if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+              if (currentUser?.id !== userRef.current?.id || (!profileRef.current && currentUser)) {
+                userRef.current = currentUser;
+                setUser(currentUser);
+                if (currentUser) {
+                  const userProfile = await fetchProfile(currentUser.id);
+                  profileRef.current = userProfile;
+                  setProfile(userProfile);
+                }
               }
+            } else if (event === 'SIGNED_OUT') {
+              userRef.current = null;
+              profileRef.current = null;
+              setUser(null);
+              setProfile(null);
             }
-          } else if (event === 'SIGNED_OUT') {
-            userRef.current = null;
-            profileRef.current = null;
-            setUser(null);
-            setProfile(null);
-          }
-          
-          // Only stop loading if we have a user AND a profile (or no user at all)
-          if (!currentUser || profileRef.current || event === 'SIGNED_OUT') {
+          } catch (err) {
+            console.error('[SupabaseContext] Error in onAuthStateChange callback:', err);
+          } finally {
             setLoading(false);
           }
         });

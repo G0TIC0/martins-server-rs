@@ -5,6 +5,7 @@ import { useSupabase } from '../context/SupabaseContext';
 import { Plus, Search, Edit2, Trash2, X, User, Mail, Phone, FileText, MapPin } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, mapCustomer } from '../lib/utils';
+import { toast } from 'sonner';
 
 import { withRetry } from '../lib/supabase-retry';
 
@@ -54,11 +55,12 @@ export const Customers: React.FC = () => {
     e.preventDefault();
     
     if (!profile?.uid) {
-      alert('Erro: Perfil de usuário não carregado. Por favor, recarregue a página.');
+      toast.error('Erro: Perfil de usuário não carregado. Por favor, recarregue a página.');
       return;
     }
 
     setSaving(true);
+    const toastId = toast.loading(editingCustomer ? 'Atualizando cliente...' : 'Cadastrando cliente...');
     
     try {
       const customerData = {
@@ -81,6 +83,7 @@ export const Customers: React.FC = () => {
             .eq('id', editingCustomer.id)
         ) as { error: any };
         if (error) throw error;
+        toast.success('Cliente atualizado com sucesso!', { id: toastId });
       } else {
         const { error } = await withRetry(async () => 
           await supabase
@@ -91,6 +94,7 @@ export const Customers: React.FC = () => {
             })
         ) as { error: any };
         if (error) throw error;
+        toast.success('Cliente cadastrado com sucesso!', { id: toastId });
       }
       
       setIsModalOpen(false);
@@ -107,7 +111,7 @@ export const Customers: React.FC = () => {
         errorMessage = `Erro: ${error.message}`;
       }
       
-      alert(errorMessage);
+      toast.error(errorMessage, { id: toastId });
     } finally {
       setSaving(false);
     }
@@ -132,12 +136,15 @@ export const Customers: React.FC = () => {
 
   const confirmDelete = async () => {
     if (!deleteConfirmId) return;
+    const toastId = toast.loading('Excluindo cliente...');
     try {
       const { error } = await supabase.from('customers').delete().eq('id', deleteConfirmId);
       if (error) throw error;
+      toast.success('Cliente excluído com sucesso!', { id: toastId });
       fetchCustomers();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error deleting customer:', error);
+      toast.error(`Erro ao excluir cliente: ${error.message}`, { id: toastId });
     } finally {
       setDeleteConfirmId(null);
     }

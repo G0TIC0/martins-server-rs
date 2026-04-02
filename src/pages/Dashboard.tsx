@@ -148,7 +148,7 @@ export const Dashboard: React.FC = () => {
               <option>Este ano</option>
             </select>
           </div>
-          <div className="w-full min-w-0" style={{ height: 320 }}>
+          <div className="w-full min-w-0" style={{ height: 320, minHeight: 320 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={statusData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F3F4F6" />
@@ -171,7 +171,7 @@ export const Dashboard: React.FC = () => {
         {/* Status Distribution */}
         <div className="rounded-2xl border border-[#E5E7EB] bg-white p-6 shadow-sm">
           <h2 className="mb-6 text-lg font-bold text-[#111827]">Distribuição de Status</h2>
-          <div className="w-full min-w-0" style={{ height: 256 }}>
+          <div className="w-full min-w-0" style={{ height: 256, minHeight: 256 }}>
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie

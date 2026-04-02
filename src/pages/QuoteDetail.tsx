@@ -10,6 +10,7 @@ import { cn, formatCurrency, generateQuoteNumber } from '../lib/utils';
 import { reviewQuoteItems, generateCommercialText } from '../services/geminiService';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { toast } from 'sonner';
 
 import { withRetry } from '../lib/supabase-retry';
 
@@ -186,30 +187,36 @@ export const QuoteDetail: React.FC = () => {
     const updatedTimeline = [...(quote.timeline || []), event];
     
     try {
-      const { error } = await supabase
-        .from('quotes')
-        .update({
-          status: newStatus,
-          timeline: updatedTimeline,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', id);
+      const { error } = await withRetry(async () => 
+        await supabase
+          .from('quotes')
+          .update({
+            status: newStatus,
+            timeline: updatedTimeline,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', id)
+      ) as { error: any };
 
       if (error) throw error;
       setQuote(prev => ({ ...prev, status: newStatus, timeline: updatedTimeline }));
-    } catch (error) {
+      toast.success(`Status atualizado para: ${newStatus}`);
+    } catch (error: any) {
       console.error('Error updating status:', error);
+      toast.error(`Erro ao atualizar status: ${error.message}`);
     }
   };
 
   const handleSave = async () => {
     if (!quote.customerId) {
-      alert('Selecione um cliente.');
+      toast.error('Selecione um cliente.');
       return;
     }
     setSaving(true);
+    const saveToastId = toast.loading('Salvando orçamento...');
+    
     try {
-      const data = {
+      const quoteData = {
         quote_number: quote.quoteNumber,
         title: quote.title,
         customer_id: quote.customerId,
@@ -219,7 +226,6 @@ export const QuoteDetail: React.FC = () => {
         vehicle_plate: quote.vehiclePlate,
         vehicle_model: quote.vehicleModel,
         observations: quote.observations,
-        items: quote.items,
         timeline: quote.timeline,
         subtotal: quote.subtotal,
         discount_total: quote.discountTotal,
@@ -232,6 +238,8 @@ export const QuoteDetail: React.FC = () => {
         terms: quote.terms,
         updated_at: new Date().toISOString(),
       };
+
+      let quoteId = id;
 
       if (id === 'new') {
         const initialEvent: TimelineEvent = {
@@ -246,7 +254,7 @@ export const QuoteDetail: React.FC = () => {
           await supabase
             .from('quotes')
             .insert({
-              ...data,
+              ...quoteData,
               status: 'received',
               timeline: [initialEvent],
               created_by: profile?.uid,
@@ -258,26 +266,63 @@ export const QuoteDetail: React.FC = () => {
 
         if (error) throw error;
         if (newQuote) {
-          navigate(`/quotes/${(newQuote as any).id}`, { replace: true });
+          quoteId = (newQuote as any).id;
         }
       } else {
         const { error } = await withRetry(async () => 
           await supabase
             .from('quotes')
-            .update(data)
+            .update(quoteData)
             .eq('id', id!)
         ) as { error: any };
         
         if (error) throw error;
       }
+
+      // Save Items separately (Architecture Mismatch Fix)
+      if (quoteId) {
+        // Delete existing items first if updating
+        if (id !== 'new') {
+          await withRetry(async () => 
+            await supabase.from('quote_items').delete().eq('quote_id', quoteId!)
+          );
+        }
+
+        // Insert new items
+        if (quote.items && quote.items.length > 0) {
+          const itemsToInsert = quote.items.map(item => ({
+            quote_id: quoteId,
+            item_id: item.itemId,
+            item_code: item.itemCode,
+            name: item.name,
+            ncm: item.ncm,
+            type: item.type,
+            quantity: item.quantity,
+            cost_price: item.costPrice,
+            unit_price: item.unitPrice,
+            discount: item.discount,
+            total: item.total
+          }));
+
+          const { error: itemsError } = await withRetry(async () => 
+            await supabase.from('quote_items').insert(itemsToInsert)
+          ) as { error: any };
+
+          if (itemsError) throw itemsError;
+        }
+      }
       
       // Generate PDF after saving
       await generatePDF();
       
-      alert('Orçamento salvo e PDF gerado com sucesso!');
+      toast.success('Orçamento salvo e PDF gerado com sucesso!', { id: saveToastId });
+      
+      if (id === 'new' && quoteId) {
+        navigate(`/quotes/${quoteId}`, { replace: true });
+      }
     } catch (error: any) {
       console.error('Error saving quote:', error);
-      alert(`Erro ao salvar orçamento: ${error.message}`);
+      toast.error(`Erro ao salvar orçamento: ${error.message}`, { id: saveToastId });
     } finally {
       setSaving(false);
     }
