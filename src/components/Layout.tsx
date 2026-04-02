@@ -19,15 +19,21 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   const navigate = useNavigate();
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(true);
 
-  const checkRole = (itemRole: string) => {
-    if (itemRole === 'admin') return isAdmin;
-    if (itemRole === 'manager') return isManager;
-    if (itemRole === 'sales') return isSales || isTechnician;
-    if (itemRole === 'customer') return isCustomer || isSales || isTechnician;
-    return true;
-  };
+  const filteredNavItems = React.useMemo(() => {
+    const checkRole = (itemRole: string) => {
+      if (itemRole === 'admin') return isAdmin;
+      if (itemRole === 'manager') return isManager;
+      if (itemRole === 'sales') return isSales || isTechnician;
+      if (itemRole === 'customer') return isCustomer || isSales || isTechnician;
+      return true;
+    };
+    return navItems.filter(item => checkRole(item.role));
+  }, [isAdmin, isManager, isSales, isTechnician, isCustomer]);
 
-  const activeItem = navItems.find((item) => item.path === location.pathname);
+  const activeItem = React.useMemo(() => 
+    navItems.find((item) => item.path === location.pathname),
+    [location.pathname]
+  );
 
   return (
     <div className="flex h-screen bg-[#F8F9FA] font-sans text-[#1A1A1A]">
@@ -49,8 +55,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         </div>
 
         <nav className="flex-1 space-y-1.5 px-4 py-6">
-          {navItems.map((item) => {
-            if (!checkRole(item.role)) return null;
+          {filteredNavItems.map((item) => {
             const isActive = location.pathname === item.path;
             const Icon = item.icon;
 

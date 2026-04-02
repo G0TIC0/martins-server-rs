@@ -6,11 +6,18 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+const currencyFormatter = new Intl.NumberFormat('pt-BR', {
+  style: 'currency',
+  currency: 'BRL',
+});
+
+const dateTimeFormatter = new Intl.DateTimeFormat('pt-BR', {
+  dateStyle: 'short',
+  timeStyle: 'short',
+});
+
 export function formatCurrency(value: number) {
-  return new Intl.NumberFormat('pt-BR', {
-    style: 'currency',
-    currency: 'BRL',
-  }).format(value);
+  return currencyFormatter.format(value);
 }
 
 export function formatDateTime(date: string | Date | undefined | null) {
@@ -18,10 +25,7 @@ export function formatDateTime(date: string | Date | undefined | null) {
   const d = new Date(date);
   if (isNaN(d.getTime())) return '-';
   
-  return new Intl.DateTimeFormat('pt-BR', {
-    dateStyle: 'short',
-    timeStyle: 'short',
-  }).format(d);
+  return dateTimeFormatter.format(d);
 }
 
 export function generateQuoteNumber() {

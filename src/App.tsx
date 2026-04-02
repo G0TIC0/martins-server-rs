@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { SupabaseProvider, useSupabase } from './context/SupabaseContext';
 import { Layout } from './components/Layout';
 import { Dashboard } from './pages/Dashboard';
@@ -10,7 +10,7 @@ import { QuoteDetail } from './pages/QuoteDetail';
 import { Settings } from './pages/Settings';
 import { Login } from './pages/Login';
 
-const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+const ProtectedLayout: React.FC = () => {
   const { user, loading } = useSupabase();
 
   if (loading) {
@@ -25,7 +25,11 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
     return <Navigate to="/login" replace />;
   }
 
-  return <Layout>{children}</Layout>;
+  return (
+    <Layout>
+      <Outlet />
+    </Layout>
+  );
 };
 
 export default function App() {
@@ -34,54 +38,16 @@ export default function App() {
       <Router>
         <Routes>
           <Route path="/login" element={<Login />} />
-          <Route
-            path="/"
-            element={
-              <ProtectedRoute>
-                <Dashboard />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/customers"
-            element={
-              <ProtectedRoute>
-                <Customers />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/items"
-            element={
-              <ProtectedRoute>
-                <Items />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/quotes"
-            element={
-              <ProtectedRoute>
-                <Quotes />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/quotes/:id"
-            element={
-              <ProtectedRoute>
-                <QuoteDetail />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/settings"
-            element={
-              <ProtectedRoute>
-                <Settings />
-              </ProtectedRoute>
-            }
-          />
+          
+          <Route element={<ProtectedLayout />}>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/customers" element={<Customers />} />
+            <Route path="/items" element={<Items />} />
+            <Route path="/quotes" element={<Quotes />} />
+            <Route path="/quotes/:id" element={<QuoteDetail />} />
+            <Route path="/settings" element={<Settings />} />
+          </Route>
+
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Router>

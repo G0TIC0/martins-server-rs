@@ -106,10 +106,13 @@ export const Customers: React.FC = () => {
     }
   };
 
-  const filteredCustomers = customers.filter(c =>
-    c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    c.document.includes(searchTerm) ||
-    c.email.toLowerCase().includes(searchTerm.toLowerCase())
+  const filteredCustomers = React.useMemo(() => 
+    customers.filter(c =>
+      c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      c.document.includes(searchTerm) ||
+      c.email.toLowerCase().includes(searchTerm.toLowerCase())
+    ),
+    [customers, searchTerm]
   );
 
   return (

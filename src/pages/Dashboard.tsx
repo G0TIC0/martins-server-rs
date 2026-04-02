@@ -43,28 +43,30 @@ export const Dashboard: React.FC = () => {
     return () => clearTimeout(timeoutId);
   }, []);
 
-  const stats = {
-    total: quotes.length,
-    approved: quotes.filter(q => q.status === 'finished').length,
-    pending: quotes.filter(q => ['received', 'analyzing', 'negotiating', 'awaiting_approval', 'executing'].includes(q.status)).length,
-    totalValue: quotes.reduce((acc, q) => acc + q.grandTotal, 0),
-    avgTicket: quotes.length > 0 ? quotes.reduce((acc, q) => acc + q.grandTotal, 0) / quotes.length : 0,
-    approvalRate: quotes.length > 0 ? (quotes.filter(q => q.status === 'finished').length / quotes.length) * 100 : 0,
-  };
+  const stats = React.useMemo(() => {
+    const total = quotes.length;
+    const approved = quotes.filter(q => q.status === 'finished').length;
+    const pending = quotes.filter(q => ['received', 'analyzing', 'negotiating', 'awaiting_approval', 'executing'].includes(q.status)).length;
+    const totalValue = quotes.reduce((acc, q) => acc + q.grandTotal, 0);
+    const avgTicket = total > 0 ? totalValue / total : 0;
+    const approvalRate = total > 0 ? (approved / total) * 100 : 0;
 
-  const statusData = [
+    return { total, approved, pending, totalValue, avgTicket, approvalRate };
+  }, [quotes]);
+
+  const statusData = React.useMemo(() => [
     { name: 'Finalizados', value: stats.approved },
     { name: 'Em Aberto', value: stats.pending },
-  ];
+  ], [stats.approved, stats.pending]);
 
-  const stuckQuotes = quotes.filter(q => {
+  const stuckQuotes = React.useMemo(() => quotes.filter(q => {
     if (q.status !== 'negotiating') return false;
     const lastUpdate = q.updatedAt ? (q.updatedAt as any).toDate?.() || new Date(q.updatedAt) : new Date(q.createdAt);
     const hoursStuck = (new Date().getTime() - lastUpdate.getTime()) / (1000 * 60 * 60);
     return hoursStuck > 24;
-  });
+  }), [quotes]);
 
-  const recentQuotes = quotes.slice(0, 5);
+  const recentQuotes = React.useMemo(() => quotes.slice(0, 5), [quotes]);
 
   if (loading) {
     return (

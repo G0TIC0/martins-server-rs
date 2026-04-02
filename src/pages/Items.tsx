@@ -238,10 +238,13 @@ export const Items: React.FC = () => {
     setFormData({ ...formData, partCodes: formData.partCodes.filter(c => c !== code) });
   };
 
-  const filteredItems = items.filter(i =>
-    i.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (i.ncm && i.ncm.includes(searchTerm)) ||
-    (i.partCodes && i.partCodes.some(c => c.toLowerCase().includes(searchTerm.toLowerCase())))
+  const filteredItems = React.useMemo(() => 
+    items.filter(i =>
+      i.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (i.ncm && i.ncm.includes(searchTerm)) ||
+      (i.partCodes && i.partCodes.some(c => c.toLowerCase().includes(searchTerm.toLowerCase())))
+    ),
+    [items, searchTerm]
   );
 
   const typeConfig: Record<ItemType, { label: string; icon: any; color: string }> = {

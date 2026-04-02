@@ -4,5 +4,6 @@
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --color-martins-blue: #B0E0E6;
+  --animate-spin-slow: spin 3s linear infinite;
 }
 
