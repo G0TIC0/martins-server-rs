@@ -256,10 +256,53 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   );
 };
 
+export const DEMO_USER = {
+  id: 'demo-user',
+  email: 'demo@martins.com',
+  app_metadata: {},
+  user_metadata: { display_name: 'Usuário Demo' },
+  aud: 'authenticated',
+  created_at: new Date().toISOString(),
+} as User;
+
+export const DEMO_PROFILE: UserProfile = {
+  uid: 'demo-user',
+  email: 'demo@martins.com',
+  displayName: 'Usuário Demo',
+  photoURL: '',
+  role: 'sales',
+  createdAt: new Date().toISOString(),
+};
+
 export const useSupabase = () => {
   const context = useContext(SupabaseContext);
   if (context === undefined) {
     throw new Error('useSupabase must be used within a SupabaseProvider');
   }
   return context;
+};
+
+import { useDemo } from './DemoContext';
+
+export const useEffectiveUser = () => {
+  const supabaseAuth = useSupabase();
+  const { isDemoMode, endDemo } = useDemo();
+
+  if (isDemoMode) {
+    return {
+      user: DEMO_USER,
+      profile: DEMO_PROFILE,
+      loading: false,
+      error: null,
+      logout: async () => endDemo(),
+      isAdmin: false,
+      isManager: false,
+      isSales: true,
+      isFinance: false,
+      isTechnician: false,
+      isCustomer: false,
+    };
+  }
+
+  return supabaseAuth;
 };

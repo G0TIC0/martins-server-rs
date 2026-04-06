@@ -1,7 +1,9 @@
 import React from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, Users, Package, FileText, Settings, LogOut, Menu, X, Bell, Search, User as UserIcon, Disc } from 'lucide-react';
-import { useSupabase } from '../context/SupabaseContext';
+import { useEffectiveUser } from '../context/SupabaseContext';
+import { useDemo } from '../context/DemoContext';
+import { DemoTimer } from './DemoTimer';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 
@@ -14,7 +16,8 @@ const navItems = [
 ];
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { profile, logout, isSales, isManager, isAdmin, isTechnician, isCustomer } = useSupabase();
+  const { profile, logout, isSales, isManager, isAdmin, isTechnician, isCustomer } = useEffectiveUser();
+  const { isDemoMode } = useDemo();
   const location = useLocation();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = React.useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false);
@@ -177,7 +180,14 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
             <div className="h-8 w-px bg-[#E5E7EB] mx-1 md:mx-2"></div>
             <div className="flex items-center gap-2 md:gap-3">
               <div className="text-right hidden sm:block">
-                <p className="text-sm font-medium text-[#111827] truncate max-w-[100px]">{profile?.displayName}</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-medium text-[#111827] truncate max-w-[100px]">{profile?.displayName}</p>
+                  {isDemoMode && (
+                    <span className="rounded bg-yellow-100 px-1 text-[10px] font-bold text-yellow-800">
+                      DEMO
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-[#6B7280] capitalize">{profile?.role}</p>
               </div>
               <img
@@ -205,6 +215,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
           </AnimatePresence>
         </div>
       </main>
+
+      <DemoTimer />
     </div>
   );
 };

@@ -1,6 +1,7 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, Outlet, useNavigate } from 'react-router-dom';
 import { SupabaseProvider, useSupabase } from './context/SupabaseContext';
+import { DemoProvider, useDemo } from './context/DemoContext';
 import { Layout } from './components/Layout';
 import { Dashboard } from './pages/Dashboard';
 import { Customers } from './pages/Customers';
@@ -14,6 +15,14 @@ import { Toaster } from 'sonner';
 
 const ProtectedLayout: React.FC = () => {
   const { user, loading } = useSupabase();
+  const { isDemoMode, demoTimeLeft } = useDemo();
+  const navigate = useNavigate();
+
+  React.useEffect(() => {
+    if (isDemoMode && demoTimeLeft <= 0) {
+      navigate('/login', { replace: true });
+    }
+  }, [isDemoMode, demoTimeLeft, navigate]);
 
   if (loading) {
     return (
@@ -23,7 +32,7 @@ const ProtectedLayout: React.FC = () => {
     );
   }
 
-  if (!user) {
+  if (!user && !isDemoMode) {
     return <Navigate to="/login" replace />;
   }
 
@@ -37,23 +46,25 @@ const ProtectedLayout: React.FC = () => {
 export default function App() {
   return (
     <SupabaseProvider>
-      <Toaster position="top-right" expand={true} richColors />
-      <Router>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          
-          <Route element={<ProtectedLayout />}>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/customers" element={<Customers />} />
-            <Route path="/items" element={<Items />} />
-            <Route path="/quotes" element={<Quotes />} />
-            <Route path="/quotes/:id" element={<QuoteDetail />} />
-            <Route path="/settings" element={<Settings />} />
-          </Route>
+      <DemoProvider>
+        <Toaster position="top-right" expand={true} richColors />
+        <Router>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            
+            <Route element={<ProtectedLayout />}>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/customers" element={<Customers />} />
+              <Route path="/items" element={<Items />} />
+              <Route path="/quotes" element={<Quotes />} />
+              <Route path="/quotes/:id" element={<QuoteDetail />} />
+              <Route path="/settings" element={<Settings />} />
+            </Route>
 
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </Router>
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Router>
+      </DemoProvider>
     </SupabaseProvider>
   );
 }

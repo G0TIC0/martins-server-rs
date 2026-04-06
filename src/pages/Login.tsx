@@ -1,12 +1,15 @@
 import React, { useState } from 'react';
 import { useSupabase } from '../context/SupabaseContext';
-import { Navigate } from 'react-router-dom';
+import { Navigate, useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
-import { LogIn, Disc, Mail, Lock, ChevronRight } from 'lucide-react';
+import { LogIn, Disc, Mail, Lock, ChevronRight, PlayCircle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { useDemo } from '../context/DemoContext';
 
 export const Login: React.FC = () => {
   const { user, loading } = useSupabase();
+  const { startDemo } = useDemo();
+  const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -34,6 +37,11 @@ export const Login: React.FC = () => {
     } finally {
       setIsLoggingIn(false);
     }
+  };
+
+  const handleStartDemo = () => {
+    startDemo();
+    navigate('/');
   };
 
   return (
@@ -103,6 +111,20 @@ export const Login: React.FC = () => {
               <ChevronRight className="h-5 w-5" />
             </button>
           </form>
+
+          <div className="relative flex items-center py-2">
+            <div className="flex-grow border-t border-gray-300"></div>
+            <span className="mx-4 flex-shrink text-xs font-medium text-gray-400 uppercase">ou</span>
+            <div className="flex-grow border-t border-gray-300"></div>
+          </div>
+
+          <button
+            onClick={handleStartDemo}
+            className="flex w-full items-center justify-center gap-3 rounded-2xl border-2 border-[#111827] px-6 py-3 text-base font-bold text-[#111827] transition-all hover:bg-[#111827] hover:text-white active:scale-95"
+          >
+            <PlayCircle className="h-5 w-5" />
+            Experimentar por 30 minutos
+          </button>
 
           <p className="text-center text-xs text-[#9CA3AF]">
             Ao entrar, você concorda com nossos Termos de Serviço e Política de Privacidade.
