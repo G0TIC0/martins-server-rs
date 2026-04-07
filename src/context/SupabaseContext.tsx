@@ -20,7 +20,10 @@ interface SupabaseContextType {
 
 const SupabaseContext = createContext<SupabaseContextType | undefined>(undefined);
 
+import { useDemo } from './DemoContext';
+
 export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { isDemoMode, endDemo } = useDemo();
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -216,6 +219,22 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, []);
 
   const value = React.useMemo(() => {
+    if (isDemoMode) {
+      return {
+        user: DEMO_USER,
+        profile: DEMO_PROFILE,
+        loading: false,
+        error: null,
+        logout: async () => endDemo(),
+        isAdmin: true,
+        isManager: true,
+        isSales: true,
+        isFinance: true,
+        isTechnician: true,
+        isCustomer: false,
+      };
+    }
+
     const role = profile?.role;
     const isAdmin = role === 'admin' || user?.email === 'mig7mor@gmail.com';
     const isManager = role === 'manager' || isAdmin;
@@ -237,7 +256,7 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       isTechnician,
       isCustomer
     };
-  }, [user, profile, loading, error, handleLogout]);
+  }, [user, profile, loading, error, handleLogout, isDemoMode, endDemo]);
 
   return (
     <SupabaseContext.Provider value={value}>
@@ -270,7 +289,7 @@ export const DEMO_PROFILE: UserProfile = {
   email: 'demo@martins.com',
   displayName: 'Usuário Demo',
   photoURL: '',
-  role: 'sales',
+  role: 'admin',
   createdAt: new Date().toISOString(),
 };
 
@@ -280,29 +299,4 @@ export const useSupabase = () => {
     throw new Error('useSupabase must be used within a SupabaseProvider');
   }
   return context;
-};
-
-import { useDemo } from './DemoContext';
-
-export const useEffectiveUser = () => {
-  const supabaseAuth = useSupabase();
-  const { isDemoMode, endDemo } = useDemo();
-
-  if (isDemoMode) {
-    return {
-      user: DEMO_USER,
-      profile: DEMO_PROFILE,
-      loading: false,
-      error: null,
-      logout: async () => endDemo(),
-      isAdmin: false,
-      isManager: false,
-      isSales: true,
-      isFinance: false,
-      isTechnician: false,
-      isCustomer: false,
-    };
-  }
-
-  return supabaseAuth;
 };

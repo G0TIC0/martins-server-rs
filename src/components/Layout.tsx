@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, Users, Package, FileText, Settings, LogOut, Menu, X, Bell, Search, User as UserIcon, Disc } from 'lucide-react';
-import { useEffectiveUser } from '../context/SupabaseContext';
+import { useSupabase } from '../context/SupabaseContext';
 import { useDemo } from '../context/DemoContext';
 import { DemoTimer } from './DemoTimer';
 import { motion, AnimatePresence } from 'motion/react';
@@ -16,7 +16,7 @@ const navItems = [
 ];
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { profile, logout, isSales, isManager, isAdmin, isTechnician, isCustomer } = useEffectiveUser();
+  const { profile, logout, isSales, isManager, isAdmin, isTechnician, isCustomer } = useSupabase();
   const { isDemoMode } = useDemo();
   const location = useLocation();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = React.useState(false);

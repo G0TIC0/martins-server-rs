@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { demoStore } from '../lib/demo-store';
 
 interface DemoContextType {
   isDemoMode: boolean;
@@ -17,6 +18,7 @@ export const DemoProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const endDemo = useCallback(() => {
     localStorage.removeItem('demo_session');
+    demoStore.clear();
     setIsDemoMode(false);
     setDemoTimeLeft(0);
   }, []);

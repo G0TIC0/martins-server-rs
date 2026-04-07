@@ -45,8 +45,8 @@ const ProtectedLayout: React.FC = () => {
 
 export default function App() {
   return (
-    <SupabaseProvider>
-      <DemoProvider>
+    <DemoProvider>
+      <SupabaseProvider>
         <Toaster position="top-right" expand={true} richColors />
         <Router>
           <Routes>
@@ -64,7 +64,7 @@ export default function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Router>
-      </DemoProvider>
-    </SupabaseProvider>
+      </SupabaseProvider>
+    </DemoProvider>
   );
 }

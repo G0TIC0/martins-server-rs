@@ -141,7 +141,7 @@ export function mapNcm(n: any): Ncm {
 
 export function mapProfile(p: any): UserProfile {
   return {
-    uid: p.id,
+    uid: p.id || p.uid,
     email: p.email,
     displayName: p.display_name,
     photoURL: p.photo_url,

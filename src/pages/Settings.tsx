@@ -317,8 +317,8 @@ export const Settings: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#F3F4F6]">
-                {users.map((u) => (
-                  <tr key={u.uid} className="group">
+                {users.map((u, index) => (
+                  <tr key={u.uid || index} className="group">
                     <td className="py-4 pl-2">
                       <div className="flex items-center gap-3">
                         <img src={u.photoURL} className="h-8 w-8 rounded-full" referrerPolicy="no-referrer" />
