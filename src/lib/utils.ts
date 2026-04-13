@@ -67,6 +67,14 @@ export function mapQuote(q: any): Quote {
     approvedBy: q.approved_by,
     items: q.quote_items ? q.quote_items.map(mapQuoteItem) : [],
     timeline: q.timeline_events ? q.timeline_events.map(mapTimelineEvent) : [],
+    photos: q.quote_photos ? q.quote_photos.map((p: any) => ({
+      id: p.id,
+      quoteId: p.quote_id,
+      photoUrl: p.photo_url,
+      caption: p.caption,
+      sortOrder: p.sort_order,
+      createdAt: p.created_at
+    })) : [],
   };
 }
 

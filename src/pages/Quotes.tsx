@@ -2,18 +2,20 @@ import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Quote, QuoteStatus } from '../types';
 import { useSupabase } from '../context/SupabaseContext';
-import { Plus, Search, Eye, Trash2, FileText, Clock, CheckCircle, AlertCircle, X, TrendingUp, Users, ArrowUpRight, Copy, Mail, Edit2 } from 'lucide-react';
+import { Plus, Search, Eye, Trash2, FileText, Clock, CheckCircle, AlertCircle, X, TrendingUp, Users, ArrowUpRight, Copy, Mail, Edit2, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatCurrency, formatDateTime, generateQuoteNumber, mapQuote } from '../lib/utils';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 
 import { withRetry } from '../lib/supabase-retry';
 
 export const Quotes: React.FC = () => {
   const navigate = useNavigate();
-  const { isAdmin, isSales, isCustomer, profile } = useSupabase();
+  const { isAdmin, isManager, isSales, isCustomer, profile } = useSupabase();
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<QuoteStatus | 'all'>('all');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -49,13 +51,24 @@ export const Quotes: React.FC = () => {
 
   const confirmDelete = async () => {
     if (!deleteConfirmId) return;
+    const idToDelete = deleteConfirmId;
+    setDeleting(true);
     try {
-      const { error } = await supabase.from('quotes').delete().eq('id', deleteConfirmId);
+      const { error } = await withRetry(async () => 
+        await supabase.from('quotes').delete().eq('id', idToDelete)
+      ) as { error: any };
+      
       if (error) throw error;
-      fetchQuotes();
-    } catch (error) {
+      
+      // Atualização otimista: remove da lista local imediatamente
+      setQuotes(prev => prev.filter(q => q.id !== idToDelete));
+      
+      toast.success('Orçamento excluído com sucesso!');
+    } catch (error: any) {
       console.error('Error deleting quote:', error);
+      toast.error(`Erro ao excluir orçamento: ${error.message}`);
     } finally {
+      setDeleting(false);
       setDeleteConfirmId(null);
     }
   };
@@ -116,11 +129,86 @@ export const Quotes: React.FC = () => {
     }
   };
 
-  const handleGenerateEmail = (quote: Quote) => {
-    const subject = encodeURIComponent(`Orçamento ${quote.quoteNumber}`);
-    const body = encodeURIComponent(`Olá ${quote.customerName},\n\nSegue em anexo o orçamento solicitado.\n\nNúmero: ${quote.quoteNumber}\nTotal: ${formatCurrency(quote.grandTotal)}\n\nAtenciosamente,\nEquipe Comercial`);
-    const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=&su=${subject}&body=${body}`;
-    window.open(gmailUrl, '_blank');
+  const handleGenerateEmail = async (quote: Quote) => {
+    try {
+      // 1. Buscar itens do orçamento
+      const { data: itemsData, error: itemsError } = await withRetry(async () => 
+        await supabase.from('quote_items').select('*').eq('quote_id', quote.id)
+      ) as { data: any[] | null; error: any };
+
+      if (itemsError) throw itemsError;
+      const quoteItems = (itemsData || []).map(i => ({
+        name: i.name,
+        quantity: Number(i.quantity),
+        unit: i.unit || 'un',
+        unitPrice: Number(i.unit_price)
+      }));
+
+      // 2. Buscar e-mail do cliente
+      const { data: customerData, error: customerError } = await withRetry(async () => 
+        await supabase.from('customers').select('email').eq('id', quote.customerId).single()
+      ) as { data: any | null; error: any };
+
+      const customerEmail = customerData?.email || '';
+
+      // 3. Buscar e-mails fixos (CC)
+      const { data: recipientsData } = await withRetry(async () => 
+        await supabase.from('email_recipients').select('email').eq('active', true)
+      ) as { data: any[] | null; error: any };
+
+      const ccEmails = (recipientsData || [])
+        .map((r: any) => r.email)
+        .filter(email => email && email.trim() !== '' && email !== customerEmail);
+
+      // 4. Buscar dados da empresa
+      const { data: settingsData } = await withRetry(async () => 
+        await supabase.from('company_settings').select('*').limit(1).single()
+      ) as { data: any | null; error: any };
+
+      // 5. Formatar o número do orçamento (apenas o final)
+      const displayQuoteNumber = quote.quoteNumber.includes('-') 
+        ? quote.quoteNumber.split('-').pop() 
+        : quote.quoteNumber;
+
+      const subject = encodeURIComponent(`Orçamento nº ${displayQuoteNumber} - ${quote.title}`);
+      
+      // Construir a lista de itens
+      const itemsList = quoteItems.map((item, index) => 
+        `${index + 1}. ${item.name.toUpperCase()} – ${item.quantity} ${item.unit} – ${formatCurrency(item.unitPrice)}`
+      ).join('\n');
+
+      const bodyText = `Prezados,
+
+Conforme solicitado, segue o orçamento nº ${displayQuoteNumber} referente aos serviços de manutenção mecânica:
+
+${itemsList}
+
+Valor total: ${formatCurrency(quote.grandTotal || 0)}
+Prazo estimado: 30 dias
+
+Esta proposta é válida por 30 dias. O pagamento pode ser realizado via PIX ou transferência bancária. Favor responder a este e-mail para confirmação e agendamento do serviço.
+
+Atenciosamente,
+${settingsData?.name || 'S.F SERVIÇOS MECÂNICOS'}
+${settingsData?.phone || ''} | ${settingsData?.email || ''}`;
+
+      const body = encodeURIComponent(bodyText);
+      const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(customerEmail)}&cc=${encodeURIComponent(ccEmails.join(','))}&su=${subject}&body=${body}`;
+      
+      const newWindow = window.open(gmailUrl, '_blank');
+      if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+        const link = document.createElement('a');
+        link.href = gmailUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+    } catch (error) {
+      console.error('Error generating email:', error);
+      alert('Erro ao gerar e-mail. Verifique sua conexão.');
+    }
   };
 
   const filteredQuotes = quotes.filter(q => {
@@ -228,7 +316,7 @@ export const Quotes: React.FC = () => {
                           </button>
                         </>
                       )}
-                      {isAdmin && (
+                      {(isAdmin || isManager) && (
                         <button
                           onClick={() => handleDelete(quote.id)}
                           title="Excluir"
@@ -276,9 +364,17 @@ export const Quotes: React.FC = () => {
                 </button>
                 <button
                   onClick={confirmDelete}
-                  className="rounded-xl bg-[#EF4444] px-8 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[#EF4444]/20 hover:bg-[#DC2626]"
+                  disabled={deleting}
+                  className="flex items-center justify-center gap-2 rounded-xl bg-[#EF4444] px-8 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[#EF4444]/20 hover:bg-[#DC2626] disabled:opacity-50"
                 >
-                  Excluir
+                  {deleting ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Excluindo...
+                    </>
+                  ) : (
+                    'Excluir'
+                  )}
                 </button>
               </div>
             </motion.div>

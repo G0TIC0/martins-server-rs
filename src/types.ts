@@ -114,6 +114,7 @@ export interface Quote {
   updatedAt: string;
   approvedAt?: string;
   approvedBy?: string;
+  photos?: QuotePhoto[];
 }
 
 export interface CompanySettings {
@@ -143,4 +144,21 @@ export interface AuditLog {
   entityId: string;
   details: string;
   timestamp: string;
+}
+
+export interface EmailRecipient {
+  id: string;
+  email: string;
+  label?: string;
+  active: boolean;
+  createdAt: string;
+}
+
+export interface QuotePhoto {
+  id: string;
+  quoteId: string;
+  photoUrl: string; // base64 ou URL pública
+  caption?: string;
+  sortOrder: number;
+  createdAt: string;
 }

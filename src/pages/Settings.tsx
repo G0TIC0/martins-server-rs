@@ -1,13 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { UserProfile, UserRole, CompanySettings } from '../types';
+import { UserProfile, UserRole, CompanySettings, EmailRecipient } from '../types';
 import { useSupabase } from '../context/SupabaseContext';
 import { mapProfile } from '../lib/utils';
-import { Settings as SettingsIcon, User, Shield, Bell, Database, Save, CheckCircle, AlertCircle, Building2, Globe, Mail, Phone, MapPin, Image as ImageIcon } from 'lucide-react';
+import { Settings as SettingsIcon, User, Shield, Bell, Database, Save, CheckCircle, AlertCircle, FileText, Building2, Globe, Mail, Phone, MapPin, Image as ImageIcon, Plus, Trash2, ToggleLeft, ToggleRight, X } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 
 import { withRetry } from '../lib/supabase-retry';
+
+import { toast } from 'sonner';
 
 export const Settings: React.FC = () => {
   const { profile, isAdmin } = useSupabase();
@@ -15,6 +17,11 @@ export const Settings: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [companySaving, setCompanySaving] = useState(false);
+  const [emailRecipients, setEmailRecipients] = useState<EmailRecipient[]>([]);
+  const [newEmail, setNewEmail] = useState('');
+  const [newEmailLabel, setNewEmailLabel] = useState('');
+  const [emailSaving, setEmailSaving] = useState(false);
+  const [showEmailForm, setShowEmailForm] = useState(false);
 
   const [companyData, setCompanyData] = useState<CompanySettings>({
     id: '00000000-0000-0000-0000-000000000000',
@@ -35,6 +42,7 @@ export const Settings: React.FC = () => {
           await fetchUsers();
         }
         await fetchCompanyData();
+        await fetchEmailRecipients();
       } catch (error) {
         console.error('[Settings] Error fetching data:', error);
       } finally {
@@ -125,6 +133,137 @@ export const Settings: React.FC = () => {
       alert(`Erro ao salvar dados da empresa: ${error.message}`);
     } finally {
       setCompanySaving(false);
+    }
+  };
+
+  const [tableMissing, setTableMissing] = useState(false);
+
+  const fetchEmailRecipients = async () => {
+    const { data, error } = await withRetry(async () => 
+      await supabase.from('email_recipients').select('*').order('created_at')
+    ) as { data: any[] | null; error: any };
+    
+    if (error) {
+      if (error.code === 'PGRST204' || error.code === 'PGRST205' || error.message?.includes('not found')) {
+        console.warn('[Settings] Table email_recipients not found. Database setup may be required.');
+        setTableMissing(true);
+        return;
+      }
+      console.error('Error fetching email recipients:', error);
+      return;
+    }
+    setTableMissing(false);
+    setEmailRecipients((data || []).map(r => ({
+      id: r.id,
+      email: r.email,
+      label: r.label,
+      active: r.active,
+      createdAt: r.created_at
+    })));
+  };
+
+  const copyMigrationSql = () => {
+    const sql = `-- Criar tabela de E-mails Destinatários
+CREATE TABLE IF NOT EXISTS email_recipients (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  email TEXT NOT NULL UNIQUE,
+  label TEXT,
+  active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Habilitar Segurança (RLS)
+ALTER TABLE email_recipients ENABLE ROW LEVEL SECURITY;
+
+-- Remover políticas antigas se existirem para evitar erro de duplicidade
+DROP POLICY IF EXISTS "Admin and Sales can manage email recipients" ON email_recipients;
+DROP POLICY IF EXISTS "Staff can read email recipients" ON email_recipients;
+
+-- Política para Administradores, Gestores e Vendedores gerenciarem e-mails
+CREATE POLICY "Admin and Sales can manage email recipients" ON email_recipients
+  FOR ALL USING (
+    EXISTS (
+      SELECT 1 FROM profiles
+      WHERE id = auth.uid() AND role IN ('admin', 'manager', 'sales')
+    )
+  );
+
+-- Política para todos lerem os e-mails
+CREATE POLICY "Staff can read email recipients" ON email_recipients
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM profiles
+      WHERE id = auth.uid() AND role IN ('admin', 'manager', 'sales', 'technician')
+    )
+  );`;
+    
+    navigator.clipboard.writeText(sql);
+    toast.success('SQL de migração copiado para a área de transferência!');
+  };
+
+  const handleAddEmailRecipient = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const email = newEmail.trim();
+    if (!email) {
+      toast.error('O e-mail é obrigatório');
+      return;
+    }
+    
+    setEmailSaving(true);
+    try {
+      console.log('[Settings] Adding email recipient:', email);
+      const { error } = await withRetry(async () => 
+        await supabase.from('email_recipients').insert({
+          email: email,
+          label: newEmailLabel.trim(),
+          active: true
+        }).select()
+      ) as { error: any };
+
+      if (error) {
+        console.error('[Settings] Supabase error adding email:', error);
+        if (error.code === 'PGRST204' || error.code === 'PGRST205') {
+          toast.error('Erro: A tabela de e-mails não foi encontrada no banco de dados. Por favor, execute as migrações SQL.');
+          return;
+        }
+        throw error;
+      }
+
+      toast.success('E-mail cadastrado com sucesso!');
+      setNewEmail('');
+      setNewEmailLabel('');
+      setShowEmailForm(false);
+      await fetchEmailRecipients();
+    } catch (error: any) {
+      console.error('[Settings] Error adding email recipient:', error);
+      toast.error(`Erro ao adicionar e-mail: ${error.message || 'Erro desconhecido'}`);
+    } finally {
+      setEmailSaving(false);
+    }
+  };
+
+  const toggleEmailRecipient = async (id: string, currentStatus: boolean) => {
+    try {
+      const { error } = await withRetry(async () => 
+        await supabase.from('email_recipients').update({ active: !currentStatus }).eq('id', id)
+      ) as { error: any };
+      if (error) throw error;
+      await fetchEmailRecipients();
+    } catch (error: any) {
+      console.error('Error toggling email recipient:', error);
+    }
+  };
+
+  const deleteEmailRecipient = async (id: string) => {
+    if (!confirm('Tem certeza que deseja excluir este e-mail?')) return;
+    try {
+      const { error } = await withRetry(async () => 
+        await supabase.from('email_recipients').delete().eq('id', id)
+      ) as { error: any };
+      if (error) throw error;
+      await fetchEmailRecipients();
+    } catch (error: any) {
+      console.error('Error deleting email recipient:', error);
     }
   };
 
@@ -349,6 +488,173 @@ export const Settings: React.FC = () => {
           </div>
         </section>
       )}
+
+      {/* Email Recipients Section */}
+      <section className="rounded-2xl border border-[#E5E7EB] bg-white p-8 shadow-sm">
+        <div className="mb-8 flex items-center justify-between">
+          <div className="flex items-center gap-3 text-[#111827]">
+            <Mail className="h-6 w-6" />
+            <h2 className="text-xl font-bold">E-mails para Envio de Orçamentos</h2>
+          </div>
+          <div className="flex items-center gap-4">
+            <p className="hidden text-xs text-[#6B7280] sm:block">Destinatários fixos para novos envios.</p>
+            {(profile?.role === 'admin' || profile?.role === 'manager' || profile?.role === 'sales') && !tableMissing && (
+              <button
+                onClick={() => setShowEmailForm(!showEmailForm)}
+                className={cn(
+                  "flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-bold transition-all",
+                  showEmailForm 
+                    ? "bg-[#F3F4F6] text-[#6B7280] hover:bg-[#E5E7EB]" 
+                    : "bg-[#111827] text-white hover:bg-black shadow-md"
+                )}
+              >
+                {showEmailForm ? <X className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
+                {showEmailForm ? 'Cancelar' : 'Cadastrar Novo'}
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-6">
+          {tableMissing ? (
+            <div className="rounded-2xl bg-amber-50 p-8 text-center border border-amber-100">
+              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-amber-100 text-amber-600">
+                <AlertCircle className="h-8 w-8" />
+              </div>
+              <h3 className="mb-2 text-lg font-bold text-amber-900">Banco de Dados não Configurado</h3>
+              <p className="mb-6 text-sm text-amber-800 max-w-md mx-auto">
+                A tabela de e-mails ainda não foi criada no seu Supabase. 
+                Para corrigir isso, copie o código SQL abaixo e execute-o no **SQL Editor** do seu painel Supabase.
+              </p>
+              <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+                <button
+                  onClick={copyMigrationSql}
+                  className="flex items-center gap-2 rounded-xl bg-amber-600 px-6 py-3 text-sm font-bold text-white hover:bg-amber-700 transition-all shadow-md"
+                >
+                  <FileText className="h-4 w-4" />
+                  Copiar SQL de Migração
+                </button>
+                <a 
+                  href="https://app.supabase.com" 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 rounded-xl bg-white border border-amber-200 px-6 py-3 text-sm font-bold text-amber-700 hover:bg-amber-100 transition-all"
+                >
+                  Abrir Supabase
+                </a>
+              </div>
+            </div>
+          ) : (profile?.role === 'admin' || profile?.role === 'manager' || profile?.role === 'sales') && showEmailForm && (
+            <motion.form 
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              onSubmit={handleAddEmailRecipient} 
+              className="grid grid-cols-1 gap-4 rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] p-6 sm:grid-cols-3"
+            >
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase text-[#9CA3AF]">E-mail</label>
+                <input
+                  type="email"
+                  required
+                  placeholder="exemplo@email.com"
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
+                  className="h-11 w-full rounded-xl border border-[#E5E7EB] bg-white px-4 text-sm focus:border-[#111827] focus:outline-none"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase text-[#9CA3AF]">Apelido (Opcional)</label>
+                <input
+                  type="text"
+                  placeholder="Ex: Financeiro"
+                  value={newEmailLabel}
+                  onChange={(e) => setNewEmailLabel(e.target.value)}
+                  className="h-11 w-full rounded-xl border border-[#E5E7EB] bg-white px-4 text-sm focus:border-[#111827] focus:outline-none"
+                />
+              </div>
+              <div className="flex items-end">
+                <button
+                  type="submit"
+                  disabled={emailSaving}
+                  className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#111827] text-sm font-bold text-white hover:bg-black disabled:opacity-50 transition-all active:scale-95"
+                >
+                  {emailSaving ? (
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  ) : (
+                    <Plus className="h-4 w-4" />
+                  )}
+                  {emailSaving ? 'Adicionando...' : 'Adicionar'}
+                </button>
+              </div>
+            </motion.form>
+          )}
+
+          <div className="overflow-hidden rounded-xl border border-[#E5E7EB]">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="bg-[#F9FAFB] text-[10px] font-bold uppercase tracking-wider text-[#9CA3AF]">
+                  <th className="px-6 py-3">E-mail</th>
+                  <th className="px-6 py-3">Apelido</th>
+                  <th className="px-6 py-3">Status</th>
+                  {(profile?.role === 'admin' || profile?.role === 'manager' || profile?.role === 'sales') && (
+                    <th className="px-6 py-3 text-right">Ações</th>
+                  )}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#E5E7EB]">
+                {emailRecipients.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="px-6 py-12 text-center">
+                      <div className="flex flex-col items-center gap-3">
+                        <Mail className="h-8 w-8 text-[#E5E7EB]" />
+                        <p className="text-sm text-[#6B7280]">Nenhum e-mail cadastrado.</p>
+                        {(profile?.role === 'admin' || profile?.role === 'manager' || profile?.role === 'sales') && !showEmailForm && (
+                          <button
+                            onClick={() => setShowEmailForm(true)}
+                            className="mt-2 rounded-lg border border-[#111827] px-4 py-2 text-xs font-bold text-[#111827] hover:bg-[#111827] hover:text-white transition-all"
+                          >
+                            Cadastrar Primeiro E-mail
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  emailRecipients.map((recipient) => (
+                    <tr key={recipient.id} className="group hover:bg-[#F9FAFB]">
+                      <td className="px-6 py-4 text-sm font-medium text-[#111827]">{recipient.email}</td>
+                      <td className="px-6 py-4 text-sm text-[#6B7280]">{recipient.label || '-'}</td>
+                      <td className="px-6 py-4">
+                        <button
+                          onClick={() => (profile?.role === 'admin' || profile?.role === 'manager' || profile?.role === 'sales') && toggleEmailRecipient(recipient.id, recipient.active)}
+                          className={cn(
+                            "flex items-center gap-1 text-xs font-bold uppercase",
+                            recipient.active ? "text-green-600" : "text-gray-400",
+                            (profile?.role === 'admin' || profile?.role === 'manager' || profile?.role === 'sales') ? "cursor-pointer" : "cursor-default"
+                          )}
+                        >
+                          {recipient.active ? <ToggleRight className="h-5 w-5" /> : <ToggleLeft className="h-5 w-5" />}
+                          {recipient.active ? 'Ativo' : 'Inativo'}
+                        </button>
+                      </td>
+                      {(profile?.role === 'admin' || profile?.role === 'manager' || profile?.role === 'sales') && (
+                        <td className="px-6 py-4 text-right">
+                          <button
+                            onClick={() => deleteEmailRecipient(recipient.id)}
+                            className="text-red-500 opacity-0 transition-opacity hover:text-red-700 group-hover:opacity-100"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
 
       {/* System Info */}
       <section className="rounded-2xl border border-[#E5E7EB] bg-white p-8 shadow-sm">

@@ -7,6 +7,8 @@ export interface DemoData {
   company_settings: any[];
   vehicles: any[];
   profiles: any[];
+  email_recipients: any[];
+  quote_photos: any[];
 }
 
 const INITIAL_DATA: DemoData = {
@@ -93,7 +95,24 @@ const INITIAL_DATA: DemoData = {
       role: 'admin',
       created_at: new Date().toISOString(),
     }
-  ]
+  ],
+  email_recipients: [
+    {
+      id: 'demo-email-1',
+      email: 'financeiro@martins.com.br',
+      label: 'Financeiro',
+      active: true,
+      created_at: new Date().toISOString(),
+    },
+    {
+      id: 'demo-email-2',
+      email: 'gerencia@martins.com.br',
+      label: 'Gerência',
+      active: true,
+      created_at: new Date().toISOString(),
+    }
+  ],
+  quote_photos: []
 };
 
 const STORAGE_KEY = 'martins_demo_data';

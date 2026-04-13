@@ -230,6 +230,48 @@ CREATE POLICY "Staff can manage timeline events" ON timeline_events
     )
   );
 
+-- Company Settings: Read for everyone, Manage for Admin/Manager
+CREATE POLICY "Anyone can read company settings" ON company_settings
+  FOR SELECT USING (auth.role() = 'authenticated');
+
+CREATE POLICY "Admin and Manager can manage company settings" ON company_settings
+  FOR ALL USING (
+    EXISTS (
+      SELECT 1 FROM profiles 
+      WHERE id = auth.uid() AND role IN ('admin', 'manager')
+    )
+  );
+
+-- NCMs: Read for everyone, Manage for Admin/Manager
+CREATE POLICY "Anyone can read ncms" ON ncms
+  FOR SELECT USING (auth.role() = 'authenticated');
+
+CREATE POLICY "Admin and Manager can manage ncms" ON ncms
+  FOR ALL USING (
+    EXISTS (
+      SELECT 1 FROM profiles 
+      WHERE id = auth.uid() AND role IN ('admin', 'manager')
+    )
+  );
+
+-- Vehicles: Staff can manage
+CREATE POLICY "Staff can manage vehicles" ON vehicles
+  FOR ALL USING (
+    EXISTS (
+      SELECT 1 FROM profiles 
+      WHERE id = auth.uid() AND role IN ('admin', 'sales', 'manager', 'technician')
+    )
+  );
+
+-- Audit Logs: Admin and Manager can read
+CREATE POLICY "Admin and Manager can read audit logs" ON audit_logs
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM profiles 
+      WHERE id = auth.uid() AND role IN ('admin', 'manager')
+    )
+  );
+
 -- Trigger to create profile on signup
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS trigger AS $$

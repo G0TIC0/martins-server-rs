@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { Quote, Customer, Item, QuoteItem, QuoteStatus, CompanySettings, TimelineEvent, QuoteClassification } from '../types';
+import { Quote, Customer, Item, QuoteItem, QuoteStatus, CompanySettings, TimelineEvent, QuoteClassification, QuotePhoto, EmailRecipient } from '../types';
 import { useSupabase } from '../context/SupabaseContext';
 import { mapQuote, mapCustomer, mapItem, mapProfile } from '../lib/utils';
-import { Plus, Trash2, Save, Send, CheckCircle, XCircle, X, Search, FileText, Sparkles, AlertCircle, ChevronLeft, Download, User, Package, Calculator, Clock, Check } from 'lucide-react';
+import { Plus, Trash2, Save, Send, CheckCircle, XCircle, X, Search, FileText, Sparkles, AlertCircle, ChevronLeft, Download, User, Package, Calculator, Clock, Check, Image as ImageIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatCurrency, generateQuoteNumber } from '../lib/utils';
 import { reviewQuoteItems, generateCommercialText } from '../services/geminiService';
@@ -26,6 +26,7 @@ export const QuoteDetail: React.FC = () => {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [catalogItems, setCatalogItems] = useState<Item[]>([]);
   const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
+  const [photos, setPhotos] = useState<Partial<QuotePhoto>[]>([]);
   const [itemSearchTerm, setItemSearchTerm] = useState('');
   const [showItemResults, setShowItemResults] = useState(false);
 
@@ -49,6 +50,26 @@ export const QuoteDetail: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
+        setLoading(true);
+        // Reset quote state to prevent duplication from previous views
+        setQuote({
+          quoteNumber: generateQuoteNumber(),
+          title: '',
+          status: 'received',
+          items: [],
+          timeline: [],
+          subtotal: 0,
+          discountTotal: 0,
+          taxTotal: 0,
+          shippingFee: 0,
+          urgencyFee: 0,
+          grandTotal: 0,
+          validUntil: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+          notes: '',
+          terms: 'Pagamento em 30 dias após aprovação.',
+        });
+        setPhotos([]);
+
         const [custRes, itemRes, settingsRes] = await Promise.all([
           withRetry(async () => await supabase.from('customers').select('*').order('name')) as Promise<{ data: any[] | null; error: any }>,
           withRetry(async () => await supabase.from('items').select('*').order('name')) as Promise<{ data: any[] | null; error: any }>,
@@ -79,14 +100,19 @@ export const QuoteDetail: React.FC = () => {
           const { data: quoteData, error: quoteError } = await withRetry(async () => 
             await supabase
               .from('quotes')
-              .select('*, quote_items(*), timeline_events(*)')
+              .select('*, quote_items(*), timeline_events(*), quote_photos(*)')
               .eq('id', id)
               .single()
           ) as { data: any | null; error: any };
           
           if (quoteError) throw quoteError;
           if (quoteData) {
-            setQuote(mapQuote(quoteData as any));
+            const mapped = mapQuote(quoteData as any);
+            setQuote(mapped);
+            
+            if (mapped.photos) {
+              setPhotos(mapped.photos);
+            }
           }
         }
       } catch (error) {
@@ -143,6 +169,126 @@ export const QuoteDetail: React.FC = () => {
   const removeItem = (index: number) => {
     const updatedItems = (quote.items || []).filter((_, i) => i !== index);
     calculateTotals(updatedItems);
+  };
+
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+
+    const remainingSlots = 10 - photos.length;
+    const filesToProcess = Array.from(files).slice(0, remainingSlots);
+
+    filesToProcess.forEach(file => {
+      const f = file as File;
+      if (f.size > 2 * 1024 * 1024) {
+        alert(`A foto ${f.name} excede o limite de 2MB.`);
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setPhotos(prev => [...prev, {
+          photoUrl: reader.result as string,
+          caption: '',
+          sortOrder: prev.length
+        }]);
+      };
+      reader.readAsDataURL(f);
+    });
+  };
+
+  const removePhoto = (index: number) => {
+    setPhotos(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const updatePhotoCaption = (index: number, caption: string) => {
+    setPhotos(prev => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], caption };
+      return updated;
+    });
+  };
+
+  const handleSendEmail = async () => {
+    try {
+      if (!quote) return;
+
+      // Buscar destinatários fixos
+      const { data, error: emailError } = await withRetry(async () => 
+        await supabase
+          .from('email_recipients')
+          .select('email')
+          .eq('active', true)
+      ) as { data: any[] | null; error: any };
+
+      if (emailError) {
+        console.warn('[QuoteDetail] Error fetching email recipients:', emailError);
+      }
+
+      // E-mails configurados vão para o CC
+      const ccEmails = (data || [])
+        .map((r: any) => r.email)
+        .filter(email => email && email.trim() !== '');
+      
+      // Buscar e-mail do cliente (vai para o TO)
+      const customer = customers.find(c => c.id === quote.customerId);
+      const customerEmail = customer?.email || '';
+      
+      // Se o e-mail do cliente estiver na lista de CC, removemos do CC para não duplicar
+      const filteredCc = ccEmails.filter(email => email !== customerEmail);
+
+      if (!customerEmail && filteredCc.length === 0) {
+        alert('Nenhum e-mail de destino encontrado. Verifique o cadastro do cliente ou os e-mails fixos em Configurações.');
+        return;
+      }
+
+      // Extrair apenas o número final do orçamento se seguir o padrão ORC-YYYYMM-XXXX
+      const displayQuoteNumber = quote.quoteNumber.includes('-') 
+        ? quote.quoteNumber.split('-').pop() 
+        : quote.quoteNumber;
+
+      const subject = encodeURIComponent(`Orçamento nº ${displayQuoteNumber} - ${quote.title}`);
+      
+      // Construir a lista de itens para o corpo do e-mail
+      const itemsList = (quote.items || []).map((item, index) => 
+        `${index + 1}. ${item.name.toUpperCase()} – ${item.quantity} ${item.unit || 'un'} – ${formatCurrency(item.unitPrice)}`
+      ).join('\n');
+
+      const bodyText = `Prezados,
+
+Conforme solicitado, segue o orçamento nº ${displayQuoteNumber} referente aos serviços de manutenção mecânica:
+
+${itemsList}
+
+Valor total: ${formatCurrency(quote.grandTotal || 0)}
+Prazo estimado: 30 dias
+
+Esta proposta é válida por 30 dias. O pagamento pode ser realizado via PIX ou transferência bancária. Favor responder a este e-mail para confirmação e agendamento do serviço.
+
+Atenciosamente,
+${companySettings?.name || 'S.F SERVIÇOS MECÂNICOS'}
+${companySettings?.phone || ''} | ${companySettings?.email || ''}`;
+
+      const body = encodeURIComponent(bodyText);
+
+      // Usar o Gmail Web com destinatário principal e cópias configuradas
+      const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(customerEmail)}&cc=${encodeURIComponent(filteredCc.join(','))}&su=${subject}&body=${body}`;
+      
+      // Abrir em nova aba de forma mais robusta
+      const newWindow = window.open(gmailUrl, '_blank');
+      if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+        const link = document.createElement('a');
+        link.href = gmailUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+    } catch (error) {
+      console.error('Error sending email:', error);
+      alert('Ocorreu um erro ao tentar abrir o e-mail. Verifique se o seu navegador permite pop-ups.');
+    }
   };
 
   const getTermsByClassification = (classification: QuoteClassification, plate: string) => {
@@ -324,11 +470,35 @@ export const QuoteDetail: React.FC = () => {
 
           if (itemsError) throw new Error(`Erro ao salvar novos itens: ${itemsError.message}`);
         }
+
+        // Save Photos
+        const { error: deletePhotosError } = await withRetry(async () => 
+          await supabase.from('quote_photos').delete().eq('quote_id', quoteId!)
+        ) as { error: any };
+
+        if (deletePhotosError) throw new Error(`Erro ao limpar fotos antigas: ${deletePhotosError.message}`);
+
+        if (photos.length > 0) {
+          const photosToInsert = photos.map((photo, index) => ({
+            quote_id: quoteId,
+            photo_url: photo.photoUrl,
+            caption: photo.caption || '',
+            sort_order: index,
+          }));
+
+          const { error: photosError } = await withRetry(async () => 
+            await supabase.from('quote_photos').insert(photosToInsert)
+          ) as { error: any };
+
+          if (photosError) throw new Error(`Erro ao salvar fotos: ${photosError.message}`);
+        }
       }
       
       // Generate PDF after saving but BEFORE navigation
       try {
-        await generatePDF();
+        // Update quote state with photos for PDF generation
+        const updatedQuote = { ...quote, photos: photos as QuotePhoto[] };
+        await generatePDF(updatedQuote);
       } catch (pdfError) {
         console.error('Error generating PDF:', pdfError);
         alert('Orçamento salvo, mas houve um erro ao gerar o PDF. Você pode tentar baixar o PDF novamente na lista de orçamentos.');
@@ -336,18 +506,22 @@ export const QuoteDetail: React.FC = () => {
       
       // If it was a new quote, navigate to it
       if (id === 'new' && quoteId) {
+        alert('Orçamento salvo com sucesso!');
         navigate(`/quotes/${quoteId}`, { replace: true });
       } else {
         // Refresh data if not navigating
-        const { data: quoteData } = await supabase
+        const { data: refreshedData } = await supabase
           .from('quotes')
-          .select('*, quote_items(*), timeline_events(*)')
+          .select('*, quote_items(*), timeline_events(*), quote_photos(*)')
           .eq('id', quoteId!)
           .single();
-        if (quoteData) setQuote(mapQuote(quoteData));
+        if (refreshedData) {
+          const mapped = mapQuote(refreshedData);
+          setQuote(mapped);
+          if (mapped.photos) setPhotos(mapped.photos);
+        }
+        alert('Orçamento salvo com sucesso!');
       }
-      
-      alert('Orçamento salvo com sucesso!');
     } catch (error: any) {
       console.error('Error saving quote:', error);
       alert(`Erro ao salvar orçamento: ${error.message}`);
@@ -369,9 +543,10 @@ export const QuoteDetail: React.FC = () => {
     }
   };
 
-  const generatePDF = async () => {
+  const generatePDF = async (quoteData?: Partial<Quote>) => {
     const doc = new jsPDF();
-    const customer = customers.find(c => c.id === quote.customerId);
+    const currentQuote = quoteData || quote;
+    const customer = customers.find(c => c.id === currentQuote.customerId);
 
     // Helper to get base64 from URL
     const getBase64FromUrl = async (url: string): Promise<string | null> => {
@@ -424,10 +599,10 @@ export const QuoteDetail: React.FC = () => {
 
     doc.setFontSize(10);
     doc.setTextColor(100);
-    doc.text(`Número: ${quote.quoteNumber}`, 20, 55);
+    doc.text(`Número: ${currentQuote.quoteNumber}`, 20, 55);
     
     let currentY = 60;
-    if (quote.classification) {
+    if (currentQuote.classification) {
       const classificationLabels: Record<string, string> = {
         preventive: 'Preventivo',
         preventive_preview: 'Preventivo Prévio',
@@ -437,14 +612,14 @@ export const QuoteDetail: React.FC = () => {
         general_overhaul_preview: 'Reforma Geral Prévio',
         complementary: 'Complementar'
       };
-      doc.text(`Classificação: ${classificationLabels[quote.classification]}`, 20, currentY);
+      doc.text(`Classificação: ${classificationLabels[currentQuote.classification]}`, 20, currentY);
       currentY += 5;
     }
     
     doc.text(`Data: ${new Date().toLocaleDateString()}`, 20, currentY);
     currentY += 5;
     
-    const validUntilDate = quote.validUntil ? new Date(quote.validUntil) : null;
+    const validUntilDate = currentQuote.validUntil ? new Date(currentQuote.validUntil) : null;
     const validUntilStr = validUntilDate && !isNaN(validUntilDate.getTime()) 
       ? validUntilDate.toLocaleDateString() 
       : '-';
@@ -466,8 +641,8 @@ export const QuoteDetail: React.FC = () => {
       doc.text(`Tel: ${customer.phone}`, 20, 107);
     }
 
-    doc.text(`Placa: ${quote.vehiclePlate || '-'}`, 110, 92);
-    doc.text(`Modelo: ${quote.vehicleModel || '-'}`, 110, 97);
+    doc.text(`Placa: ${currentQuote.vehiclePlate || '-'}`, 110, 92);
+    doc.text(`Modelo: ${currentQuote.vehicleModel || '-'}`, 110, 97);
 
     // Items Table
     const typeLabels: Record<string, string> = {
@@ -480,7 +655,7 @@ export const QuoteDetail: React.FC = () => {
     autoTable(doc, {
       startY: 110,
       head: [['Cód', 'Item', 'NCM', 'Tipo', 'Qtd', 'Unitário', 'Total']],
-      body: (quote.items || []).map(item => {
+      body: (currentQuote.items || []).map(item => {
         // Try to find missing data in catalog if needed
         const catalogItem = catalogItems.find(i => i.id === item.itemId);
         const itemCode = item.itemCode || (catalogItem?.partCodes?.[0] || '');
@@ -506,7 +681,7 @@ export const QuoteDetail: React.FC = () => {
     // Totals
     doc.setFontSize(12);
     doc.setFont('helvetica', 'bold');
-    const totalValue = quote.grandTotal || 0;
+    const totalValue = currentQuote.grandTotal || 0;
     doc.text(`TOTAL: ${formatCurrency(totalValue)}`, 140, finalY);
 
     // Footer
@@ -514,9 +689,68 @@ export const QuoteDetail: React.FC = () => {
     doc.setFont('helvetica', 'normal');
     doc.text('Termos e Condições:', 20, finalY + 30);
     doc.setFontSize(8);
-    doc.text(quote.terms || '', 20, finalY + 37, { maxWidth: 170 });
+    doc.text(currentQuote.terms || '', 20, finalY + 37, { maxWidth: 170 });
 
-    doc.save(`${quote.quoteNumber}.pdf`);
+    // Photos Section
+    const quotePhotos = (currentQuote.photos && currentQuote.photos.length > 0) 
+      ? currentQuote.photos 
+      : (photos as QuotePhoto[]);
+
+    if (quotePhotos.length > 0) {
+      doc.addPage();
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.text('REGISTRO FOTOGRÁFICO', 105, 20, { align: 'center' });
+
+      let photoX = 20;
+      let photoY = 30;
+      const photoWidth = 85;
+      const photoHeight = 60;
+      const marginBetween = 10;
+      let col = 0;
+
+      for (const photo of quotePhotos) {
+        if (!photo.photoUrl) continue;
+        
+        const base64 = await getBase64FromUrl(photo.photoUrl);
+        if (!base64) continue;
+
+        if (photoY + photoHeight + 20 > doc.internal.pageSize.height - 20) {
+          doc.addPage();
+          photoX = 20;
+          photoY = 30;
+          col = 0;
+        }
+
+        try {
+          // Detect format from base64 string
+          let format = 'JPEG';
+          if (base64.startsWith('data:image/png')) format = 'PNG';
+          if (base64.startsWith('data:image/webp')) format = 'WEBP';
+          
+          doc.addImage(base64, format, photoX, photoY, photoWidth, photoHeight, undefined, 'FAST');
+          
+          if (photo.caption) {
+            doc.setFontSize(8);
+            doc.setFont('helvetica', 'normal');
+            doc.text(photo.caption, photoX + photoWidth / 2, photoY + photoHeight + 5, { align: 'center' });
+          }
+        } catch (imgError) {
+          console.warn('Error adding image to PDF:', imgError);
+        }
+
+        col++;
+        if (col === 2) {
+          col = 0;
+          photoX = 20;
+          photoY += photoHeight + marginBetween + 10;
+        } else {
+          photoX += photoWidth + marginBetween;
+        }
+      }
+    }
+
+    doc.save(`${currentQuote.quoteNumber}.pdf`);
   };
 
   const canEdit = !isCustomer && (isSales || isManager || isAdmin);
@@ -537,24 +771,37 @@ export const QuoteDetail: React.FC = () => {
             <p className="text-sm text-[#6B7280]">Gerencie os detalhes e itens da proposta comercial.</p>
           </div>
         </div>
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
           {canEdit && (
             <>
               <button
+                onClick={handleSendEmail}
+                className="flex h-11 items-center gap-2 rounded-xl border border-[#E5E7EB] bg-white px-4 text-sm font-semibold text-[#111827] shadow-sm transition-all hover:bg-[#F9FAFB] active:scale-95"
+              >
+                <Send className="h-4 w-4" />
+                <span className="hidden xs:inline">Enviar por E-mail</span>
+                <span className="xs:hidden">E-mail</span>
+              </button>
+              <button
                 onClick={handleAiReview}
-                disabled={isAiReviewing || quote.items?.length === 0}
-                className="flex items-center gap-2 rounded-xl border border-[#E5E7EB] bg-white px-4 py-2.5 text-sm font-semibold text-[#111827] shadow-sm hover:bg-[#F9FAFB] disabled:opacity-50"
+                disabled={isAiReviewing || (quote.items?.length || 0) === 0}
+                className="flex h-11 items-center gap-2 rounded-xl border border-[#E5E7EB] bg-white px-4 text-sm font-semibold text-[#111827] shadow-sm transition-all hover:bg-[#F9FAFB] active:scale-95 disabled:opacity-50"
               >
                 <Sparkles className={cn("h-4 w-4", isAiReviewing && "animate-pulse")} />
-                Revisão IA
+                <span className="hidden xs:inline">Revisão IA</span>
+                <span className="xs:hidden">IA</span>
               </button>
               <button
                 onClick={handleSave}
                 disabled={saving}
-                className="flex items-center gap-2 rounded-xl bg-[#111827] px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[#111827]/20 hover:bg-black disabled:opacity-50"
+                className="flex h-11 items-center gap-2 rounded-xl bg-[#111827] px-6 text-sm font-semibold text-white shadow-lg shadow-[#111827]/20 transition-all hover:bg-black active:scale-95 disabled:opacity-50"
               >
-                <Save className="h-4 w-4" />
-                {saving ? 'Salvando...' : 'Salvar e Gerar PDF'}
+                {saving ? (
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                ) : (
+                  <Save className="h-4 w-4" />
+                )}
+                <span>{saving ? 'Salvando...' : 'Salvar e Gerar PDF'}</span>
               </button>
             </>
           )}
@@ -992,6 +1239,71 @@ export const QuoteDetail: React.FC = () => {
                   )}
                 </tbody>
               </table>
+            </div>
+          </section>
+          
+          {/* Photos Section */}
+          <section className="rounded-2xl border border-[#E5E7EB] bg-white p-6 shadow-sm">
+            <div className="mb-6 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-[#111827]">
+                <ImageIcon className="h-5 w-5" />
+                <h2 className="font-bold">Fotos do Serviço / Veículo</h2>
+              </div>
+              {canEdit && (
+                <div className="flex items-center gap-2">
+                  <label className="flex cursor-pointer items-center gap-2 rounded-lg bg-[#111827] px-3 py-1.5 text-xs font-bold text-white hover:bg-black transition-colors">
+                    <Plus className="h-3 w-3" />
+                    Adicionar Fotos
+                    <input
+                      type="file"
+                      multiple
+                      accept="image/*"
+                      onChange={handlePhotoUpload}
+                      className="hidden"
+                    />
+                  </label>
+                  <span className="text-[10px] text-[#6B7280]">{photos.length}/10 fotos</span>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {photos.map((photo, index) => (
+                <div key={index} className="group relative overflow-hidden rounded-xl border border-[#E5E7EB] bg-[#F9FAFB]">
+                  <div className="aspect-video w-full overflow-hidden">
+                    <img
+                      src={photo.photoUrl}
+                      alt={`Foto ${index + 1}`}
+                      className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                  {canEdit && (
+                    <button
+                      onClick={() => removePhoto(index)}
+                      className="absolute right-2 top-2 rounded-full bg-white/90 p-1.5 text-red-500 shadow-sm hover:bg-red-50 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                  <div className="p-3">
+                    <input
+                      type="text"
+                      placeholder="Legenda da foto..."
+                      value={photo.caption || ''}
+                      disabled={!canEdit}
+                      onChange={(e) => updatePhotoCaption(index, e.target.value)}
+                      className="w-full bg-transparent text-xs text-[#111827] focus:outline-none placeholder:text-[#9CA3AF] disabled:opacity-50"
+                    />
+                  </div>
+                </div>
+              ))}
+              {photos.length === 0 && (
+                <div className="col-span-full flex flex-col items-center justify-center py-12 text-[#9CA3AF]">
+                  <ImageIcon className="h-12 w-12 mb-2 opacity-20" />
+                  <p className="text-sm">Nenhuma foto anexada.</p>
+                </div>
+              )}
             </div>
           </section>
 
