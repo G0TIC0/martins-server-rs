@@ -16,6 +16,7 @@ interface SupabaseContextType {
   isFinance: boolean;
   isTechnician: boolean;
   isCustomer: boolean;
+  refreshProfile: () => Promise<void>;
 }
 
 const SupabaseContext = createContext<SupabaseContextType | undefined>(undefined);
@@ -36,6 +37,73 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const initialized = React.useRef(false);
   const fetchingProfile = React.useRef<string | null>(null);
 
+  const mapProfileData = (data: any): UserProfile => {
+    return {
+      uid: data.id,
+      email: data.email,
+      displayName: data.display_name || '',
+      photoURL: data.photo_url || '',
+      role: data.role as UserRole,
+      cpf: data.cpf,
+      phone: data.phone,
+      createdAt: data.created_at,
+    } as UserProfile;
+  };
+
+  const fetchProfile = async (userId: string, force = false) => {
+    if (!force && fetchingProfile.current === userId) {
+      console.log('[SupabaseContext] Already fetching profile for:', userId);
+      return profileRef.current;
+    }
+    
+    fetchingProfile.current = userId;
+    try {
+      console.log('[SupabaseContext] Fetching profile for:', userId, force ? '(forced)' : '');
+      const { data, error } = await withRetry(async () => 
+        await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', userId)
+          .single()
+      ) as { data: any | null; error: any };
+
+      if (error) {
+        if (error.code === 'PGRST116') {
+          console.warn('[SupabaseContext] Profile not found, creating default...');
+          const { data: newData, error: insertError } = await withRetry(async () => 
+            await supabase
+              .from('profiles')
+              .insert({
+                id: userId,
+                email: userRef.current?.email || '',
+                display_name: userRef.current?.user_metadata?.display_name || userRef.current?.email?.split('@')[0] || 'Usuário',
+                role: 'sales'
+              })
+              .select()
+              .single()
+          ) as { data: any | null; error: any };
+
+          if (insertError) {
+            console.error('[SupabaseContext] Error creating profile:', insertError);
+            return null;
+          }
+          console.log('[SupabaseContext] Profile created successfully.');
+          return mapProfileData(newData);
+        }
+        console.error('[SupabaseContext] Error fetching profile:', error);
+        return null;
+      }
+
+      console.log('[SupabaseContext] Profile fetched successfully.');
+      return mapProfileData(data);
+    } catch (err) {
+      console.error('[SupabaseContext] Unexpected error in fetchProfile:', err);
+      return null;
+    } finally {
+      fetchingProfile.current = null;
+    }
+  };
+
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
@@ -48,73 +116,6 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setLoading(false);
       return;
     }
-
-    const fetchProfile = async (userId: string) => {
-      if (fetchingProfile.current === userId) {
-        console.log('[SupabaseContext] Already fetching profile for:', userId);
-        return profileRef.current;
-      }
-      
-      fetchingProfile.current = userId;
-      try {
-        console.log('[SupabaseContext] Fetching profile for:', userId);
-        const { data, error } = await withRetry(async () => 
-          await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', userId)
-            .single()
-        ) as { data: any | null; error: any };
-
-        if (error) {
-          if (error.code === 'PGRST116') {
-            console.warn('[SupabaseContext] Profile not found, creating default...');
-            const { data: newData, error: insertError } = await withRetry(async () => 
-              await supabase
-                .from('profiles')
-                .insert({
-                  id: userId,
-                  email: userRef.current?.email || '',
-                  display_name: userRef.current?.user_metadata?.display_name || userRef.current?.email?.split('@')[0] || 'Usuário',
-                  role: 'sales'
-                })
-                .select()
-                .single()
-            ) as { data: any | null; error: any };
-
-            if (insertError) {
-              console.error('[SupabaseContext] Error creating profile:', insertError);
-              return null;
-            }
-            console.log('[SupabaseContext] Profile created successfully.');
-            return mapProfileData(newData);
-          }
-          console.error('[SupabaseContext] Error fetching profile:', error);
-          return null;
-        }
-
-        console.log('[SupabaseContext] Profile fetched successfully.');
-        return mapProfileData(data);
-      } catch (err) {
-        console.error('[SupabaseContext] Unexpected error in fetchProfile:', err);
-        return null;
-      } finally {
-        fetchingProfile.current = null;
-      }
-    };
-
-    const mapProfileData = (data: any): UserProfile => {
-      return {
-        uid: data.id,
-        email: data.email,
-        displayName: data.display_name || '',
-        photoURL: data.photo_url || '',
-        role: data.role as UserRole,
-        cpf: data.cpf,
-        phone: data.phone,
-        createdAt: data.created_at,
-      } as UserProfile;
-    };
 
     const initializeAuth = async () => {
       try {
@@ -218,6 +219,15 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, []);
 
+  const handleRefreshProfile = React.useCallback(async () => {
+    if (!userRef.current) return;
+    const updatedProfile = await fetchProfile(userRef.current.id, true);
+    if (updatedProfile) {
+      profileRef.current = updatedProfile;
+      setProfile(updatedProfile);
+    }
+  }, []);
+
   const value = React.useMemo(() => {
     if (isDemoMode) {
       return {
@@ -232,6 +242,7 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         isFinance: true,
         isTechnician: true,
         isCustomer: false,
+        refreshProfile: async () => {},
       };
     }
 
@@ -254,9 +265,10 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       isSales,
       isFinance,
       isTechnician,
-      isCustomer
+      isCustomer,
+      refreshProfile: handleRefreshProfile
     };
-  }, [user, profile, loading, error, handleLogout, isDemoMode, endDemo]);
+  }, [user, profile, loading, error, handleLogout, isDemoMode, endDemo, handleRefreshProfile]);
 
   return (
     <SupabaseContext.Provider value={value}>

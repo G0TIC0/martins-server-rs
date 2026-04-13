@@ -131,6 +131,7 @@ export const demoStore = {
   },
 
   saveData(data: DemoData) {
+    console.log(`[DemoStore] Salvando dados para localStorage (${Object.keys(data).length} tabelas)`);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   },
 

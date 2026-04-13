@@ -137,6 +137,7 @@ class MockQueryBuilder {
   }
 
   async then(resolve: any, reject: any) {
+    console.log(`[MockQueryBuilder] Chamado then() para ${this.operation} em ${this.table}`);
     try {
       let result: { data: any; error: any } = { data: null, error: null };
 
@@ -147,15 +148,13 @@ class MockQueryBuilder {
           break;
         case 'insert':
           const inserted = demoStore.insert(this.table, this.payload);
-          result.data = inserted; // demoStore.insert already handles array vs object return
-          toast.success('Simulado: Item inserido localmente');
+          result.data = inserted;
           break;
         case 'update':
           const idFilter = this.filters.find(f => f.column === 'id' && f.type === 'eq');
           if (idFilter) {
             const updated = demoStore.update(this.table, idFilter.value, this.payload);
             result.data = this.isSingle ? updated : [updated];
-            toast.success('Simulado: Item atualizado localmente');
           } else {
             // Bulk update simulation
             const toUpdate = this.getFilteredData();
@@ -166,12 +165,17 @@ class MockQueryBuilder {
         case 'delete':
           const delIdFilter = this.filters.find(f => f.column === 'id' && f.type === 'eq');
           if (delIdFilter) {
+            const items = demoStore.get(this.table);
+            const toDelete = items.find((item: any) => item.id === delIdFilter.value);
+            console.log(`[MockQueryBuilder] Delete ID: ${delIdFilter.value}, Encontrado: ${!!toDelete}`);
             demoStore.delete(this.table, delIdFilter.value);
-            toast.success('Simulado: Item removido localmente');
+            result.data = toDelete ? [toDelete] : [];
           } else {
             // Bulk delete simulation
             const toDelete = this.getFilteredData();
+            console.log(`[MockQueryBuilder] Bulk Delete, Itens: ${toDelete.length}`);
             toDelete.forEach((item: any) => demoStore.delete(this.table, item.id));
+            result.data = toDelete;
           }
           break;
         case 'upsert':
@@ -188,7 +192,6 @@ class MockQueryBuilder {
             result.data = demoStore.insert(this.table, upsertData);
           }
           result.data = this.isSingle ? result.data : [result.data];
-          toast.success('Simulado: Item salvo localmente');
           break;
       }
 

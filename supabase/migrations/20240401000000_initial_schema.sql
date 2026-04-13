@@ -168,11 +168,17 @@ ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
 
 -- Policies (Enterprise Grade RBAC)
 -- Profiles: Users can read all profiles (for collaboration) but only update their own
+DROP POLICY IF EXISTS "Profiles are viewable by authenticated users" ON profiles;
+DROP POLICY IF EXISTS "Users can insert their own profile" ON profiles;
+DROP POLICY IF EXISTS "Users can update their own profile" ON profiles;
+DROP POLICY IF EXISTS "Users can manage their own profile" ON profiles;
+DROP POLICY IF EXISTS "profile_self_manage_policy_v2" ON profiles;
+
 CREATE POLICY "Profiles are viewable by authenticated users" ON profiles 
   FOR SELECT USING (auth.role() = 'authenticated');
 
-CREATE POLICY "Users can update their own profile" ON profiles 
-  FOR UPDATE USING (auth.uid() = id);
+CREATE POLICY "Users can manage their own profile" ON profiles 
+  FOR ALL USING (auth.uid()::uuid = id) WITH CHECK (auth.uid()::uuid = id);
 
 -- Customers: Only staff can manage customers. Customers can't see other customers.
 CREATE POLICY "Staff can manage customers" ON customers
@@ -184,12 +190,26 @@ CREATE POLICY "Staff can manage customers" ON customers
   );
 
 -- Quotes: Staff can see all. Customers can only see their own.
-CREATE POLICY "Staff can manage all quotes" ON quotes
-  FOR ALL USING (
-    EXISTS (
-      SELECT 1 FROM profiles 
-      WHERE id = auth.uid() AND role IN ('admin', 'sales', 'manager', 'technician')
-    )
+CREATE POLICY "Staff can select quotes" ON quotes
+  FOR SELECT USING (
+    EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role IN ('admin', 'sales', 'manager', 'technician'))
+  );
+
+CREATE POLICY "Staff can insert quotes" ON quotes
+  FOR INSERT WITH CHECK (
+    EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role IN ('admin', 'sales', 'manager', 'technician'))
+  );
+
+CREATE POLICY "Staff can update quotes" ON quotes
+  FOR UPDATE USING (
+    EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role IN ('admin', 'sales', 'manager', 'technician'))
+  ) WITH CHECK (
+    EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role IN ('admin', 'sales', 'manager', 'technician'))
+  );
+
+CREATE POLICY "Admin, Manager and Sales can delete quotes" ON quotes
+  FOR DELETE USING (
+    EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role IN ('admin', 'manager', 'sales'))
   );
 
 CREATE POLICY "Customers can view their own quotes" ON quotes

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Quote, QuoteStatus } from '../types';
 import { useSupabase } from '../context/SupabaseContext';
-import { Plus, Search, Eye, Trash2, FileText, Clock, CheckCircle, AlertCircle, X, TrendingUp, Users, ArrowUpRight, Copy, Mail, Edit2, Loader2 } from 'lucide-react';
+import { Plus, Search, Eye, Trash2, FileText, Clock, CheckCircle, AlertCircle, X, TrendingUp, Users, ArrowUpRight, Copy, Mail, Edit2, Loader2, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatCurrency, formatDateTime, generateQuoteNumber, mapQuote } from '../lib/utils';
 import { useNavigate } from 'react-router-dom';
@@ -12,7 +12,7 @@ import { withRetry } from '../lib/supabase-retry';
 
 export const Quotes: React.FC = () => {
   const navigate = useNavigate();
-  const { isAdmin, isManager, isSales, isCustomer, profile } = useSupabase();
+  const { user, isAdmin, isManager, isSales, isCustomer, profile, refreshProfile } = useSupabase();
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(false);
@@ -21,11 +21,97 @@ export const Quotes: React.FC = () => {
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   useEffect(() => {
+    console.log('[Quotes] Perfil atual:', profile);
     fetchQuotes();
   }, [isCustomer, profile]);
 
-  const fetchQuotes = async () => {
+  const fixPermissions = async () => {
+    if (!user) {
+      toast.error('Usuário não autenticado.');
+      return;
+    }
+
     try {
+      setLoading(true);
+      console.log('[Quotes] Iniciando fixPermissions para:', user.id);
+      console.log('[Quotes] Email do usuário:', user.email);
+      
+      // 1. Check if profile exists
+      const { data: existingProfile, error: fetchError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (fetchError) {
+        console.error('[Quotes] Erro ao buscar perfil:', fetchError);
+        throw fetchError;
+      }
+
+      console.log('[Quotes] Perfil existente encontrado:', existingProfile);
+
+      if (!existingProfile) {
+        console.log('[Quotes] Perfil não encontrado, tentando inserir...');
+        const payload = {
+          id: user.id,
+          email: user.email || '',
+          display_name: user.user_metadata?.display_name || user.email?.split('@')[0] || 'Usuário',
+          role: 'admin'
+        };
+        console.log('[Quotes] Payload de inserção:', payload);
+        
+        const { error: insertError } = await supabase
+          .from('profiles')
+          .insert(payload);
+          
+        if (insertError) {
+          console.error('[Quotes] Erro ao inserir perfil (RLS?):', insertError);
+          throw insertError;
+        }
+        toast.success('Perfil criado com sucesso!');
+      } else if (existingProfile.role !== 'admin') {
+        console.log('[Quotes] Perfil encontrado com role:', existingProfile.role, '. Atualizando para admin...');
+        const { error: updateError } = await supabase
+          .from('profiles')
+          .update({ role: 'admin' })
+          .eq('id', user.id);
+          
+        if (updateError) {
+          console.error('[Quotes] Erro ao atualizar perfil (RLS?):', updateError);
+          throw updateError;
+        }
+        toast.success('Permissões atualizadas para Administrador!');
+      } else {
+        console.log('[Quotes] Usuário já é administrador no banco de dados.');
+        toast.success('Você já possui permissões de Administrador.');
+      }
+
+      console.log('[Quotes] Atualizando contexto...');
+      await refreshProfile();
+      
+      // Re-fetch quotes now that we have admin role
+      await fetchQuotes();
+    } catch (error: any) {
+      console.error('Error fixing permissions:', error);
+      toast.error(`Erro ao ajustar permissões: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchQuotes = async () => {
+    console.log('[Quotes] Buscando orçamentos... Role:', profile?.role);
+    
+    // Safety timeout for fetching
+    const fetchTimeout = setTimeout(() => {
+      if (loading) {
+        setLoading(false);
+        console.warn('[Quotes] Busca de orçamentos demorou demais.');
+      }
+    }, 8000);
+
+    try {
+      setLoading(true);
       const { data, error } = await withRetry(async () => {
         let query = supabase.from('quotes').select('*').order('created_at', { ascending: false });
         if (isCustomer && profile) {
@@ -34,11 +120,14 @@ export const Quotes: React.FC = () => {
         return await query;
       }) as { data: any[] | null; error: any };
 
+      clearTimeout(fetchTimeout);
       if (error) throw error;
 
+      console.log(`[Quotes] Buscados ${data?.length || 0} orçamentos`);
       const mappedData = (data || []).map(mapQuote);
       setQuotes(mappedData as Quote[]);
     } catch (error) {
+      clearTimeout(fetchTimeout);
       console.error('Error fetching quotes:', error);
     } finally {
       setLoading(false);
@@ -53,17 +142,24 @@ export const Quotes: React.FC = () => {
     if (!deleteConfirmId) return;
     const idToDelete = deleteConfirmId;
     setDeleting(true);
+    console.log(`[Quotes] Tentando excluir orçamento: ${idToDelete}`);
     try {
-      const { error } = await withRetry(async () => 
-        await supabase.from('quotes').delete().eq('id', idToDelete)
-      ) as { error: any };
+      const { data, error } = await withRetry(async () => 
+        await supabase.from('quotes').delete().eq('id', idToDelete).select()
+      ) as { data: any[] | null; error: any };
       
       if (error) throw error;
       
-      // Atualização otimista: remove da lista local imediatamente
-      setQuotes(prev => prev.filter(q => q.id !== idToDelete));
+      if (!data || data.length === 0) {
+        console.warn(`[Quotes] Nenhum orçamento foi excluído. Verifique permissões ou se o ID ${idToDelete} existe.`);
+        toast.error('Não foi possível excluir o orçamento. Verifique se você tem permissão ou se ele já foi removido.');
+      } else {
+        console.log(`[Quotes] Orçamento ${idToDelete} excluído com sucesso.`);
+        toast.success('Orçamento excluído com sucesso!');
+      }
       
-      toast.success('Orçamento excluído com sucesso!');
+      // Re-fetch data to ensure the UI is in sync with the database
+      await fetchQuotes();
     } catch (error: any) {
       console.error('Error deleting quote:', error);
       toast.error(`Erro ao excluir orçamento: ${error.message}`);
@@ -247,13 +343,31 @@ ${settingsData?.phone || ''} | ${settingsData?.email || ''}`;
           </select>
         </div>
         {!isCustomer && isSales && (
-          <button
-            onClick={() => navigate('/quotes/new')}
-            className="flex items-center gap-2 rounded-xl bg-[#111827] px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[#111827]/20 transition-all hover:bg-black hover:shadow-xl active:scale-95"
-          >
-            <Plus className="h-5 w-5" />
-            Novo Orçamento
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={fixPermissions}
+              disabled={loading}
+              className="p-2.5 text-orange-500 hover:text-orange-600 hover:bg-orange-50 rounded-xl transition-all active:scale-95 disabled:opacity-50"
+              title="Ajustar Permissões"
+            >
+              <Users className="h-5 w-5" />
+            </button>
+            <button
+              onClick={() => fetchQuotes()}
+              disabled={loading}
+              className="p-2.5 text-gray-500 hover:text-[#111827] hover:bg-gray-100 rounded-xl transition-all active:scale-95 disabled:opacity-50"
+              title="Atualizar Lista"
+            >
+              <RefreshCw className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+            <button
+              onClick={() => navigate('/quotes/new')}
+              className="flex items-center gap-2 rounded-xl bg-[#111827] px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[#111827]/20 transition-all hover:bg-black hover:shadow-xl active:scale-95"
+            >
+              <Plus className="h-5 w-5" />
+              Novo Orçamento
+            </button>
+          </div>
         )}
       </div>
 
@@ -316,7 +430,7 @@ ${settingsData?.phone || ''} | ${settingsData?.email || ''}`;
                           </button>
                         </>
                       )}
-                      {(isAdmin || isManager) && (
+                      {(isAdmin || isManager || isSales) && (
                         <button
                           onClick={() => handleDelete(quote.id)}
                           title="Excluir"
