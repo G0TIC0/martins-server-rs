@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+// OTIMIZAÇÕES APLICADAS: #7 (server-side filter)
+import React, { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { Item, ItemType, Ncm } from '../types';
 import { useSupabase } from '../context/SupabaseContext';
 import { Plus, Search, Edit2, Trash2, X, Package, Tag, DollarSign, Box, Layers, Sparkles, User, Info, Hash, PlusCircle, ChevronDown, Save, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { cn, formatCurrency, mapItem, mapNcm } from '../lib/utils';
+import { cn, formatCurrency, mapItem, mapNcm, debounce } from '../lib/utils';
 import { suggestServiceDescription } from '../services/geminiService';
 
 import { withRetry } from '../lib/supabase-retry';
@@ -40,8 +41,43 @@ export const Items: React.FC = () => {
 
   const [newPartCode, setNewPartCode] = useState('');
 
+  const fetchItems = useCallback(async (search = '') => {
+    try {
+      setLoading(true);
+      const { data, error } = await withRetry(async () => {
+        let query = supabase
+          .from('items')
+          .select('*')
+          .order('name', { ascending: true })
+          .limit(100);
+
+        if (search) {
+          query = query.or(`name.ilike.%${search}%,ncm.ilike.%${search}%,part_codes.cs.{${search}}`);
+        }
+
+        return await query;
+      }) as { data: any[] | null; error: any };
+
+      if (error) throw error;
+      const mappedData = (data || []).map(mapItem);
+      setItems(mappedData as Item[]);
+    } catch (error) {
+      console.error('Error fetching items:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const debouncedFetch = useCallback(
+    debounce((search: string) => fetchItems(search), 500),
+    [fetchItems]
+  );
+
   useEffect(() => {
-    fetchItems();
+    debouncedFetch(searchTerm);
+  }, [searchTerm, debouncedFetch]);
+
+  useEffect(() => {
     fetchNcms();
   }, []);
 
@@ -59,25 +95,6 @@ export const Items: React.FC = () => {
       setNcms(mappedData as Ncm[]);
     } catch (error) {
       console.error('Error fetching NCMs:', error);
-    }
-  };
-
-  const fetchItems = async () => {
-    try {
-      const { data, error } = await withRetry(async () => 
-        await supabase
-          .from('items')
-          .select('*')
-          .order('name', { ascending: true })
-      ) as { data: any[] | null; error: any };
-
-      if (error) throw error;
-      const mappedData = (data || []).map(mapItem);
-      setItems(mappedData as Item[]);
-    } catch (error) {
-      console.error('Error fetching items:', error);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -136,7 +153,7 @@ export const Items: React.FC = () => {
         if (error) throw error;
       }
       resetForm();
-      fetchItems();
+      fetchItems(searchTerm);
       setIsModalOpen(false);
     } catch (error: any) {
       console.error('Error saving item:', error);
@@ -255,15 +272,6 @@ export const Items: React.FC = () => {
     setFormData({ ...formData, partCodes: formData.partCodes.filter(c => c !== code) });
   };
 
-  const filteredItems = React.useMemo(() => 
-    items.filter(i =>
-      i.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (i.ncm && i.ncm.includes(searchTerm)) ||
-      (i.partCodes && i.partCodes.some(c => c.toLowerCase().includes(searchTerm.toLowerCase())))
-    ),
-    [items, searchTerm]
-  );
-
   const typeConfig: Record<ItemType, { label: string; icon: any; color: string }> = {
     service: { label: 'Serviço', icon: Sparkles, color: 'text-[#111827] bg-martins-blue' },
     product: { label: 'Produto', icon: Box, color: 'text-emerald-600 bg-emerald-50' },
@@ -309,7 +317,7 @@ export const Items: React.FC = () => {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         <AnimatePresence mode="popLayout">
-          {filteredItems.map((item) => {
+          {items.map((item) => {
             const Icon = typeConfig[item.type].icon;
             const config = typeConfig[item.type];
 

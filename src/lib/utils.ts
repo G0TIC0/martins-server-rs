@@ -147,6 +147,14 @@ export function mapNcm(n: any): Ncm {
   };
 }
 
+export function debounce<T extends (...args: any[]) => any>(fn: T, ms: number): T {
+  let timer: ReturnType<typeof setTimeout>;
+  return ((...args: any[]) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  }) as T;
+}
+
 export function mapProfile(p: any): UserProfile {
   return {
     uid: p.id || p.uid,

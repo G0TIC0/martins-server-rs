@@ -1,10 +1,11 @@
+// OTIMIZAÇÕES APLICADAS: #6a (lazy load), #6b (customer search), #6c (catalog search)
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { Quote, Customer, Item, QuoteItem, QuoteStatus, CompanySettings, TimelineEvent, QuoteClassification, QuotePhoto, EmailRecipient } from '../types';
 import { useSupabase } from '../context/SupabaseContext';
-import { mapQuote, mapCustomer, mapItem, mapProfile } from '../lib/utils';
-import { Plus, Trash2, Save, Send, CheckCircle, XCircle, X, Search, FileText, Sparkles, AlertCircle, ChevronLeft, Download, User, Package, Calculator, Clock, Check, Image as ImageIcon } from 'lucide-react';
+import { mapQuote, mapCustomer, mapItem, mapProfile, debounce } from '../lib/utils';
+import { Plus, Trash2, Save, Send, CheckCircle, XCircle, X, Search, FileText, Sparkles, AlertCircle, ChevronLeft, Download, User, Package, Calculator, Clock, Check, Image as ImageIcon, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatCurrency, generateQuoteNumber } from '../lib/utils';
 import { reviewQuoteItems, generateCommercialText } from '../services/geminiService';
@@ -29,6 +30,11 @@ export const QuoteDetail: React.FC = () => {
   const [photos, setPhotos] = useState<Partial<QuotePhoto>[]>([]);
   const [itemSearchTerm, setItemSearchTerm] = useState('');
   const [showItemResults, setShowItemResults] = useState(false);
+  const [isLoadingItems, setIsLoadingItems] = useState(false);
+  
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [isLoadingCustomers, setIsLoadingCustomers] = useState(false);
+  const [showCustomerResults, setShowCustomerResults] = useState(false);
 
   const [quote, setQuote] = useState<Partial<Quote>>({
     quoteNumber: generateQuoteNumber(),
@@ -70,17 +76,20 @@ export const QuoteDetail: React.FC = () => {
         });
         setPhotos([]);
 
-        const [custRes, itemRes, settingsRes] = await Promise.all([
-          withRetry(async () => await supabase.from('customers').select('*').order('name')) as Promise<{ data: any[] | null; error: any }>,
-          withRetry(async () => await supabase.from('items').select('*').order('name')) as Promise<{ data: any[] | null; error: any }>,
-          withRetry(async () => await supabase.from('company_settings').select('*').limit(1).single()) as Promise<{ data: any | null; error: any }>,
+        const [settingsRes, quoteRes] = await Promise.all([
+          withRetry(async () =>
+            await supabase.from('company_settings').select('*').limit(1).single()
+          ) as Promise<{ data: any | null; error: any }>,
+          id && id !== 'new'
+            ? withRetry(async () =>
+                await supabase
+                  .from('quotes')
+                  .select('*, quote_items(*), timeline_events(*), quote_photos(*)')
+                  .eq('id', id)
+                  .single()
+              ) as Promise<{ data: any | null; error: any }>
+            : Promise.resolve({ data: null, error: null }),
         ]);
-
-        if (custRes.error) throw custRes.error;
-        if (itemRes.error) throw itemRes.error;
-
-        setCustomers((custRes.data || []).map(mapCustomer) as Customer[]);
-        setCatalogItems((itemRes.data || []).map(mapItem) as Item[]);
         
         if (settingsRes.data) {
           const data = settingsRes.data as any;
@@ -96,23 +105,13 @@ export const QuoteDetail: React.FC = () => {
           });
         }
 
-        if (id && id !== 'new') {
-          const { data: quoteData, error: quoteError } = await withRetry(async () => 
-            await supabase
-              .from('quotes')
-              .select('*, quote_items(*), timeline_events(*), quote_photos(*)')
-              .eq('id', id)
-              .single()
-          ) as { data: any | null; error: any };
+        if (quoteRes.data) {
+          const mapped = mapQuote(quoteRes.data as any);
+          setQuote(mapped);
+          setCustomerSearch(mapped.customerName || '');
           
-          if (quoteError) throw quoteError;
-          if (quoteData) {
-            const mapped = mapQuote(quoteData as any);
-            setQuote(mapped);
-            
-            if (mapped.photos) {
-              setPhotos(mapped.photos);
-            }
+          if (mapped.photos) {
+            setPhotos(mapped.photos);
           }
         }
       } catch (error) {
@@ -124,6 +123,63 @@ export const QuoteDetail: React.FC = () => {
 
     fetchData();
   }, [id]);
+
+  const searchCustomers = React.useCallback(
+    debounce(async (term: string) => {
+      if (term.length < 2) {
+        setCustomers([]);
+        return;
+      }
+      setIsLoadingCustomers(true);
+      try {
+        const { data } = await supabase
+          .from('customers')
+          .select('*')
+          .ilike('name', `%${term}%`)
+          .limit(15)
+          .order('name');
+        setCustomers((data || []).map(mapCustomer) as Customer[]);
+      } catch (error) {
+        console.error('[QuoteDetail] Error searching customers:', error);
+      } finally {
+        setIsLoadingCustomers(false);
+      }
+    }, 350),
+    []
+  );
+
+  const searchCatalogItems = React.useCallback(
+    debounce(async (term: string) => {
+      if (term.length < 2) {
+        setCatalogItems([]);
+        return;
+      }
+      setIsLoadingItems(true);
+      try {
+        const { data } = await supabase
+          .from('items')
+          .select('*')
+          .eq('active', true)
+          .or(`name.ilike.%${term}%,part_codes.cs.{${term}}`)
+          .limit(20)
+          .order('name');
+        setCatalogItems((data || []).map(mapItem) as Item[]);
+      } catch (error) {
+        console.error('[QuoteDetail] Error searching items:', error);
+      } finally {
+        setIsLoadingItems(false);
+      }
+    }, 350),
+    []
+  );
+
+  useEffect(() => {
+    searchCustomers(customerSearch);
+  }, [customerSearch, searchCustomers]);
+
+  useEffect(() => {
+    searchCatalogItems(itemSearchTerm);
+  }, [itemSearchTerm, searchCatalogItems]);
 
   const calculateTotals = (items: QuoteItem[]) => {
     const subtotal = items.reduce((acc, item) => acc + item.total, 0);
@@ -975,20 +1031,71 @@ ${companySettings?.phone || ''} | ${companySettings?.email || ''}`;
                   ))}
                 </div>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 relative">
                 <label className="text-sm font-semibold text-[#374151]">Cliente</label>
-                <select
-                  value={quote.customerId}
-                  disabled={!canEdit}
-                  onChange={(e) => {
-                    const c = customers.find(cust => cust.id === e.target.value);
-                    setQuote({ ...quote, customerId: e.target.value, customerName: c?.name });
-                  }}
-                  className="h-11 w-full rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] px-4 text-sm focus:border-[#111827] focus:outline-none disabled:opacity-50"
-                >
-                  <option value="">Selecione um cliente...</option>
-                  {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9CA3AF]" />
+                  <input
+                    type="text"
+                    placeholder="Pesquisar cliente..."
+                    disabled={!canEdit}
+                    value={customerSearch}
+                    onChange={(e) => {
+                      setCustomerSearch(e.target.value);
+                      setShowCustomerResults(true);
+                    }}
+                    onFocus={() => setShowCustomerResults(true)}
+                    className="h-11 w-full rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] pl-10 pr-4 text-sm focus:border-[#111827] focus:outline-none disabled:opacity-50"
+                  />
+                  {isLoadingCustomers && (
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                      <Loader2 className="h-4 w-4 animate-spin text-[#6B7280]" />
+                    </div>
+                  )}
+                </div>
+
+                <AnimatePresence>
+                  {showCustomerResults && customerSearch.length >= 2 && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 10 }}
+                      className="absolute left-0 top-full z-50 mt-2 w-full rounded-xl border border-[#E5E7EB] bg-white p-2 shadow-xl"
+                    >
+                      <div className="max-h-64 overflow-y-auto custom-scrollbar">
+                        {customers.map(c => (
+                          <button
+                            key={c.id}
+                            onClick={() => {
+                              setQuote({ ...quote, customerId: c.id, customerName: c.name });
+                              setCustomerSearch(c.name);
+                              setShowCustomerResults(false);
+                            }}
+                            className="flex w-full items-center gap-3 rounded-lg p-3 text-left hover:bg-[#F3F4F6] transition-colors"
+                          >
+                            <User className="h-4 w-4 text-[#6B7280]" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-bold text-[#111827] truncate">{c.name}</p>
+                              <p className="text-[10px] text-[#6B7280]">{c.document || 'Sem documento'}</p>
+                            </div>
+                          </button>
+                        ))}
+                        {customers.length === 0 && !isLoadingCustomers && (
+                          <div className="py-8 text-center">
+                            <User className="h-8 w-8 mx-auto mb-2 text-[#E5E7EB]" />
+                            <p className="text-sm text-[#9CA3AF]">Nenhum cliente encontrado.</p>
+                          </div>
+                        )}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+                {showCustomerResults && (
+                  <div 
+                    className="fixed inset-0 z-40" 
+                    onClick={() => setShowCustomerResults(false)}
+                  />
+                )}
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-semibold text-[#374151]">Validade</label>
@@ -1079,7 +1186,10 @@ ${companySettings?.phone || ''} | ${companySettings?.email || ''}`;
                     />
                     {itemSearchTerm && (
                       <button
-                        onClick={() => setItemSearchTerm('')}
+                        onClick={() => {
+                          setItemSearchTerm('');
+                          setCatalogItems([]);
+                        }}
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-[#9CA3AF] hover:text-[#EF4444]"
                       >
                         <X className="h-4 w-4" />
@@ -1087,28 +1197,27 @@ ${companySettings?.phone || ''} | ${companySettings?.email || ''}`;
                     )}
                     
                     <AnimatePresence>
-                      {showItemResults && (
+                      {showItemResults && itemSearchTerm.length >= 2 && (
                         <motion.div
                           initial={{ opacity: 0, y: 10 }}
                           animate={{ opacity: 1, y: 0 }}
                           exit={{ opacity: 0, y: 10 }}
                           className="absolute right-0 top-full z-50 mt-2 w-96 rounded-xl border border-[#E5E7EB] bg-white p-2 shadow-xl"
                         >
-                          <div className="max-h-64 overflow-y-auto custom-scrollbar">
-                            {catalogItems
-                              .filter(i => 
-                                i.active && 
-                                (itemSearchTerm === '' || 
-                                 i.name.toLowerCase().includes(itemSearchTerm.toLowerCase()) || 
-                                 i.ncm?.includes(itemSearchTerm) ||
-                                 i.partCodes?.some(pc => pc.toLowerCase().includes(itemSearchTerm.toLowerCase())))
-                              )
-                              .map(item => (
+                          {isLoadingItems && (
+                            <div className="flex items-center justify-center py-8">
+                              <Loader2 className="h-6 w-6 animate-spin text-[#111827]" />
+                            </div>
+                          )}
+                          {!isLoadingItems && (
+                            <div className="max-h-64 overflow-y-auto custom-scrollbar">
+                              {catalogItems.map(item => (
                                 <button
                                   key={item.id}
                                   onClick={() => {
                                     addItem(item);
                                     setItemSearchTerm('');
+                                    setCatalogItems([]);
                                     setShowItemResults(false);
                                   }}
                                   className="flex w-full items-center gap-3 rounded-lg p-3 text-left hover:bg-[#F3F4F6] transition-colors"
@@ -1133,19 +1242,14 @@ ${companySettings?.phone || ''} | ${companySettings?.email || ''}`;
                                   <Plus className="h-4 w-4 text-[#9CA3AF]" />
                                 </button>
                               ))}
-                            {catalogItems.filter(i => 
-                              i.active && 
-                              (itemSearchTerm === '' || 
-                               i.name.toLowerCase().includes(itemSearchTerm.toLowerCase()) || 
-                               i.ncm?.includes(itemSearchTerm) ||
-                               i.partCodes?.some(pc => pc.toLowerCase().includes(itemSearchTerm.toLowerCase())))
-                            ).length === 0 && (
-                              <div className="py-8 text-center">
-                                <Package className="h-8 w-8 mx-auto mb-2 text-[#E5E7EB]" />
-                                <p className="text-sm text-[#9CA3AF]">Nenhum item encontrado.</p>
-                              </div>
-                            )}
-                          </div>
+                              {catalogItems.length === 0 && (
+                                <div className="py-8 text-center">
+                                  <Package className="h-8 w-8 mx-auto mb-2 text-[#E5E7EB]" />
+                                  <p className="text-sm text-[#9CA3AF]">Nenhum item encontrado.</p>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </motion.div>
                       )}
                     </AnimatePresence>

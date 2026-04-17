@@ -1,3 +1,4 @@
+// OTIMIZAÇÕES APLICADAS: #5a (dependência useEffect), #5b (paginação)
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Quote, QuoteStatus } from '../types';
@@ -10,6 +11,8 @@ import { toast } from 'sonner';
 
 import { withRetry } from '../lib/supabase-retry';
 
+const PAGE_SIZE = 30;
+
 export const Quotes: React.FC = () => {
   const navigate = useNavigate();
   const { user, isAdmin, isManager, isSales, isCustomer, profile, refreshProfile } = useSupabase();
@@ -19,11 +22,13 @@ export const Quotes: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<QuoteStatus | 'all'>('all');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
 
   useEffect(() => {
-    console.log('[Quotes] Perfil atual:', profile);
     fetchQuotes();
-  }, [isCustomer, profile]);
+  }, [isCustomer, profile?.uid]);
 
   const fixPermissions = async () => {
     if (!user) {
@@ -99,21 +104,28 @@ export const Quotes: React.FC = () => {
     }
   };
 
-  const fetchQuotes = async () => {
-    console.log('[Quotes] Buscando orçamentos... Role:', profile?.role);
+  const fetchQuotes = async (pageNum = 0, append = false) => {
+    console.log(`[Quotes] Buscando orçamentos (Página ${pageNum})... Role:`, profile?.role);
     
     // Safety timeout for fetching
     const fetchTimeout = setTimeout(() => {
-      if (loading) {
-        setLoading(false);
-        console.warn('[Quotes] Busca de orçamentos demorou demais.');
-      }
+      setLoading(false);
+      console.warn('[Quotes] Busca de orçamentos demorou demais.');
     }, 8000);
 
     try {
-      setLoading(true);
+      if (!append) setLoading(true);
+
+      const from = pageNum * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
+
       const { data, error } = await withRetry(async () => {
-        let query = supabase.from('quotes').select('*').order('created_at', { ascending: false });
+        let query = supabase
+          .from('quotes')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .range(from, to);
+
         if (isCustomer && profile) {
           query = query.eq('customer_id', profile.uid);
         }
@@ -124,13 +136,21 @@ export const Quotes: React.FC = () => {
       if (error) throw error;
 
       console.log(`[Quotes] Buscados ${data?.length || 0} orçamentos`);
-      const mappedData = (data || []).map(mapQuote);
-      setQuotes(mappedData as Quote[]);
+      const mappedData = (data || []).map(mapQuote) as Quote[];
+      setQuotes(prev => append ? [...prev, ...mappedData] : mappedData);
+      setHasMore((data?.length ?? 0) === PAGE_SIZE);
+      setPage(pageNum);
     } catch (error) {
       clearTimeout(fetchTimeout);
       console.error('Error fetching quotes:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadMore = () => {
+    if (hasMore && !loading) {
+      fetchQuotes(page + 1, true);
     }
   };
 
@@ -452,6 +472,19 @@ ${settingsData?.phone || ''} | ${settingsData?.email || ''}`;
           </table>
         </div>
       </div>
+
+      {hasMore && (
+        <div className="flex justify-center pt-4">
+          <button
+            onClick={loadMore}
+            disabled={loading}
+            className="rounded-xl border border-[#E5E7EB] px-6 py-2.5 text-sm font-bold text-[#6B7280] hover:bg-[#F9FAFB] transition-all disabled:opacity-50"
+          >
+            {loading ? 'Carregando...' : 'Carregar mais orçamentos'}
+          </button>
+        </div>
+      )}
+
       {/* Delete Confirmation Modal */}
       <AnimatePresence>
         {deleteConfirmId && (

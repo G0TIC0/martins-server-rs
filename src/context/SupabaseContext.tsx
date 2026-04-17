@@ -1,3 +1,4 @@
+// OTIMIZAÇÕES APLICADAS: #4 (SupabaseContext)
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { withRetry } from '../lib/supabase-retry';
@@ -145,7 +146,7 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           const currentUser = session?.user ?? null;
           
           try {
-            if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+            if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
               if (currentUser?.id !== userRef.current?.id || (!profileRef.current && currentUser)) {
                 userRef.current = currentUser;
                 setUser(currentUser);
@@ -154,6 +155,12 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                   profileRef.current = userProfile;
                   setProfile(userProfile);
                 }
+              }
+            } else if (event === 'TOKEN_REFRESHED') {
+              // Apenas atualiza o user object (token novo), sem rebuscar perfil do banco
+              if (currentUser) {
+                userRef.current = currentUser;
+                setUser(currentUser);
               }
             } else if (event === 'SIGNED_OUT') {
               userRef.current = null;
@@ -184,10 +191,10 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     // Safety timeout to ensure loading is cleared eventually
     const timeoutId = setTimeout(() => {
       if (loading) {
-        console.warn('[SupabaseContext] Safety timeout triggered. Current user:', userRef.current?.id, 'Profile:', !!profileRef.current);
+        console.error('[SupabaseContext] Timeout de inicialização (8s). Verifique a conectividade com o Supabase.');
         setLoading(false);
       }
-    }, 15000);
+    }, 8000);
 
     return () => {
       if (authSubscription) {
