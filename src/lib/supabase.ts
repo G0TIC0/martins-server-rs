@@ -206,9 +206,73 @@ const proxyHandler: ProxyHandler<any> = {
   get(target, prop, receiver) {
     const original = Reflect.get(target, prop, receiver);
     
+    // Check if configuration is missing and not in demo mode
+    const isConfigMissing = !supabaseUrl || !supabaseAnonKey;
+    const isDemo = isDemoMode();
+
+    if (prop === 'auth') {
+      if (isDemo) {
+        return {
+          getSession: async () => ({
+            data: { 
+              session: { 
+                user: { 
+                  id: 'demo-user', 
+                  email: 'demo@martins.com',
+                  user_metadata: { display_name: 'Usuário Demo' }
+                },
+                access_token: 'demo-token',
+                refresh_token: 'demo-refresh'
+              } 
+            },
+            error: null
+          }),
+          getUser: async () => ({
+            data: { 
+              user: { 
+                id: 'demo-user', 
+                email: 'demo@martins.com',
+                user_metadata: { display_name: 'Usuário Demo' }
+              } 
+            },
+            error: null
+          }),
+          onAuthStateChange: (callback: any) => {
+            // Immediately call callback with session
+            setTimeout(() => {
+              callback('SIGNED_IN', { 
+                user: { 
+                  id: 'demo-user', 
+                  email: 'demo@martins.com',
+                  user_metadata: { display_name: 'Usuário Demo' }
+                } 
+              });
+            }, 0);
+            return { data: { subscription: { unsubscribe: () => {} } } };
+          },
+          signOut: async () => {
+            localStorage.removeItem('demo_session');
+            window.location.reload();
+            return { error: null };
+          }
+        };
+      } else if (isConfigMissing) {
+        // Return a mock auth that returns nothing but no error to prevent "Failed to fetch"
+        return {
+          getSession: async () => ({ data: { session: null }, error: null }),
+          onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } }),
+          signOut: async () => ({ error: null })
+        };
+      }
+    }
+
     if (prop === 'from') {
       return (table: string) => {
-        if (isDemoMode()) {
+        if (isDemo) {
+          return new MockQueryBuilder(table);
+        }
+        if (isConfigMissing) {
+          // Return an empty builder that returns no data if config missing
           return new MockQueryBuilder(table);
         }
         return original.apply(target, [table]);

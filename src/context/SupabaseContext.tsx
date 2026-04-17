@@ -112,9 +112,12 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
     if (!supabaseUrl || !supabaseAnonKey) {
-      setError('Configuração do Supabase ausente. Verifique as variáveis de ambiente VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no painel de Segredos.');
-      setLoading(false);
-      return;
+      if (!isDemoMode) {
+        setError('Configuração do Supabase ausente. Verifique as variáveis de ambiente VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no painel de Segredos.');
+        setLoading(false);
+        return;
+      }
+      console.log('[SupabaseContext] Environment variables missing, but continuing in Demo Mode.');
     }
 
     const initializeAuth = async () => {
