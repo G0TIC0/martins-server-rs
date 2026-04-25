@@ -1,4 +1,3 @@
-// OTIMIZAÇÕES APLICADAS: #5a (dependência useEffect), #5b (paginação)
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Quote, QuoteStatus } from '../types';
@@ -11,8 +10,6 @@ import { toast } from 'sonner';
 
 import { withRetry } from '../lib/supabase-retry';
 
-const PAGE_SIZE = 30;
-
 export const Quotes: React.FC = () => {
   const navigate = useNavigate();
   const { user, isAdmin, isManager, isSales, isCustomer, profile, refreshProfile } = useSupabase();
@@ -22,110 +19,27 @@ export const Quotes: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<QuoteStatus | 'all'>('all');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
-  
-  const [page, setPage] = useState(0);
-  const [hasMore, setHasMore] = useState(true);
 
   useEffect(() => {
+    console.log('[Quotes] Perfil atual:', profile);
     fetchQuotes();
-  }, [isCustomer, profile?.uid]);
+  }, [isCustomer, profile?.uid, profile?.role]);
 
-  const fixPermissions = async () => {
-    if (!user) {
-      toast.error('Usuário não autenticado.');
-      return;
-    }
-
-    try {
-      setLoading(true);
-      console.log('[Quotes] Iniciando fixPermissions para:', user.id);
-      console.log('[Quotes] Email do usuário:', user.email);
-      
-      // 1. Check if profile exists
-      const { data: existingProfile, error: fetchError } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .maybeSingle();
-
-      if (fetchError) {
-        console.error('[Quotes] Erro ao buscar perfil:', fetchError);
-        throw fetchError;
-      }
-
-      console.log('[Quotes] Perfil existente encontrado:', existingProfile);
-
-      if (!existingProfile) {
-        console.log('[Quotes] Perfil não encontrado, tentando inserir...');
-        const payload = {
-          id: user.id,
-          email: user.email || '',
-          display_name: user.user_metadata?.display_name || user.email?.split('@')[0] || 'Usuário',
-          role: 'admin'
-        };
-        console.log('[Quotes] Payload de inserção:', payload);
-        
-        const { error: insertError } = await supabase
-          .from('profiles')
-          .insert(payload);
-          
-        if (insertError) {
-          console.error('[Quotes] Erro ao inserir perfil (RLS?):', insertError);
-          throw insertError;
-        }
-        toast.success('Perfil criado com sucesso!');
-      } else if (existingProfile.role !== 'admin') {
-        console.log('[Quotes] Perfil encontrado com role:', existingProfile.role, '. Atualizando para admin...');
-        const { error: updateError } = await supabase
-          .from('profiles')
-          .update({ role: 'admin' })
-          .eq('id', user.id);
-          
-        if (updateError) {
-          console.error('[Quotes] Erro ao atualizar perfil (RLS?):', updateError);
-          throw updateError;
-        }
-        toast.success('Permissões atualizadas para Administrador!');
-      } else {
-        console.log('[Quotes] Usuário já é administrador no banco de dados.');
-        toast.success('Você já possui permissões de Administrador.');
-      }
-
-      console.log('[Quotes] Atualizando contexto...');
-      await refreshProfile();
-      
-      // Re-fetch quotes now that we have admin role
-      await fetchQuotes();
-    } catch (error: any) {
-      console.error('Error fixing permissions:', error);
-      toast.error(`Erro ao ajustar permissões: ${error.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchQuotes = async (pageNum = 0, append = false) => {
-    console.log(`[Quotes] Buscando orçamentos (Página ${pageNum})... Role:`, profile?.role);
+  const fetchQuotes = async () => {
+    console.log('[Quotes] Buscando orçamentos... Role:', profile?.role);
     
     // Safety timeout for fetching
     const fetchTimeout = setTimeout(() => {
-      setLoading(false);
-      console.warn('[Quotes] Busca de orçamentos demorou demais.');
+      if (loading) {
+        setLoading(false);
+        console.warn('[Quotes] Busca de orçamentos demorou demais.');
+      }
     }, 8000);
 
     try {
-      if (!append) setLoading(true);
-
-      const from = pageNum * PAGE_SIZE;
-      const to = from + PAGE_SIZE - 1;
-
+      setLoading(true);
       const { data, error } = await withRetry(async () => {
-        let query = supabase
-          .from('quotes')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .range(from, to);
-
+        let query = supabase.from('quotes').select('*').order('created_at', { ascending: false });
         if (isCustomer && profile) {
           query = query.eq('customer_id', profile.uid);
         }
@@ -136,21 +50,13 @@ export const Quotes: React.FC = () => {
       if (error) throw error;
 
       console.log(`[Quotes] Buscados ${data?.length || 0} orçamentos`);
-      const mappedData = (data || []).map(mapQuote) as Quote[];
-      setQuotes(prev => append ? [...prev, ...mappedData] : mappedData);
-      setHasMore((data?.length ?? 0) === PAGE_SIZE);
-      setPage(pageNum);
+      const mappedData = (data || []).map(mapQuote);
+      setQuotes(mappedData as Quote[]);
     } catch (error) {
       clearTimeout(fetchTimeout);
       console.error('Error fetching quotes:', error);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const loadMore = () => {
-    if (hasMore && !loading) {
-      fetchQuotes(page + 1, true);
     }
   };
 
@@ -327,12 +233,14 @@ ${settingsData?.phone || ''} | ${settingsData?.email || ''}`;
     }
   };
 
-  const filteredQuotes = quotes.filter(q => {
-    const matchesSearch = q.quoteNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          q.customerName.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || q.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
+  const filteredQuotes = React.useMemo(() => {
+    return quotes.filter(q => {
+      const matchesSearch = q.quoteNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                            q.customerName.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesStatus = statusFilter === 'all' || q.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [quotes, searchTerm, statusFilter]);
 
   return (
     <div className="space-y-6">
@@ -364,14 +272,6 @@ ${settingsData?.phone || ''} | ${settingsData?.email || ''}`;
         </div>
         {!isCustomer && isSales && (
           <div className="flex items-center gap-2">
-            <button
-              onClick={fixPermissions}
-              disabled={loading}
-              className="p-2.5 text-orange-500 hover:text-orange-600 hover:bg-orange-50 rounded-xl transition-all active:scale-95 disabled:opacity-50"
-              title="Ajustar Permissões"
-            >
-              <Users className="h-5 w-5" />
-            </button>
             <button
               onClick={() => fetchQuotes()}
               disabled={loading}
@@ -472,19 +372,6 @@ ${settingsData?.phone || ''} | ${settingsData?.email || ''}`;
           </table>
         </div>
       </div>
-
-      {hasMore && (
-        <div className="flex justify-center pt-4">
-          <button
-            onClick={loadMore}
-            disabled={loading}
-            className="rounded-xl border border-[#E5E7EB] px-6 py-2.5 text-sm font-bold text-[#6B7280] hover:bg-[#F9FAFB] transition-all disabled:opacity-50"
-          >
-            {loading ? 'Carregando...' : 'Carregar mais orçamentos'}
-          </button>
-        </div>
-      )}
-
       {/* Delete Confirmation Modal */}
       <AnimatePresence>
         {deleteConfirmId && (

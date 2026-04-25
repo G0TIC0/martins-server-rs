@@ -1,85 +1,163 @@
-// OTIMIZAÇÕES APLICADAS: #8 (aggregated dashboard data)
-import React, { useEffect, useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import { Quote, QuoteStatus } from '../types';
+import { Quote } from '../types';
 import { cn, formatCurrency, formatDateTime, mapQuote } from '../lib/utils';
 import { withRetry } from '../lib/supabase-retry';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from 'recharts';
-import { TrendingUp, Users, FileText, CheckCircle, Clock, AlertCircle, ArrowUpRight, ArrowDownRight, X } from 'lucide-react';
-import { motion } from 'motion/react';
+import { TrendingUp, Users, FileText, CheckCircle, Clock, AlertCircle, ArrowUpRight, ArrowDownRight, X, Plus, Package, Settings, UserPlus } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { useNavigate } from 'react-router-dom';
+import { useSupabase } from '../context/SupabaseContext';
 
 const COLORS = ['#111827', '#B0E0E6', '#6B7280', '#9CA3AF', '#E5E7EB'];
 
 export const Dashboard: React.FC = () => {
-  const [allQuoteStats, setAllQuoteStats] = useState<{ status: string; grandTotal: number }[]>([]);
-  const [recentQuotes, setRecentQuotes] = useState<Quote[]>([]);
+  const navigate = useNavigate();
+  const { isCustomer, profile, isAdmin, isManager, isSales } = useSupabase();
+  const [quotes, setQuotes] = useState<Quote[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        console.log('[Dashboard] Fetching optimized data...');
-        const [statsRes, recentRes] = await Promise.all([
-          withRetry(async () => await supabase.from('quotes').select('status, grand_total')),
-          withRetry(async () => await supabase.from('quotes').select('*').order('created_at', { ascending: false }).limit(10))
-        ]) as [{ data: any[] | null; error: any }, { data: any[] | null; error: any }];
+  const fetchQuotes = useCallback(async (showLoading = true) => {
+    try {
+      if (showLoading) setLoading(true);
+      
+      const { data, error } = await withRetry(async () => 
+        await supabase
+          .from('quotes')
+          .select('*, quote_items(*)')
+          .order('created_at', { ascending: false })
+          .limit(100)
+      ) as { data: any[] | null; error: any };
 
-        if (statsRes.error) throw statsRes.error;
-        if (recentRes.error) throw recentRes.error;
-
-        setAllQuoteStats((statsRes.data || []).map(q => ({
-          status: q.status,
-          grandTotal: Number(q.grand_total) || 0
-        })));
-
-        setRecentQuotes((recentRes.data || []).map(mapQuote) as Quote[]);
-      } catch (error) {
-        console.error('[Dashboard] Error fetching dashboard data:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
-
-    // Safety timeout
-    const timeoutId = setTimeout(() => {
-      setLoading(false);
-    }, 5000);
-
-    return () => clearTimeout(timeoutId);
+      if (error) throw error;
+      setQuotes((data || []).map(mapQuote));
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+    } finally {
+      if (showLoading) setLoading(false);
+    }
   }, []);
 
+  useEffect(() => {
+    fetchQuotes(true);
+  }, [fetchQuotes]);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('dashboard-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'quotes' },
+        () => fetchQuotes(false)
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'quote_items' },
+        () => fetchQuotes(false)
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [fetchQuotes]);
+
   const stats = React.useMemo(() => {
-    const total = allQuoteStats.length;
-    const approved = allQuoteStats.filter(q => q.status === 'finished').length;
-    const pending = allQuoteStats.filter(q => ['received', 'analyzing', 'negotiating', 'awaiting_approval', 'executing'].includes(q.status)).length;
-    const totalValue = allQuoteStats.reduce((acc, q) => acc + q.grandTotal, 0);
-    const avgTicket = total > 0 ? totalValue / total : 0;
-    const approvalRate = total > 0 ? (approved / total) * 100 : 0;
+    const approved = quotes.filter(q => q.status === 'finished' || q.status === 'executing');
+    const totalValue = quotes.reduce((acc, q) => acc + (q.grandTotal || 0), 0);
+    const avgTicket = quotes.length > 0 ? totalValue / quotes.length : 0;
+    const approvalRate = quotes.length > 0 ? (approved.length / quotes.length) * 100 : 0;
 
-    return { total, approved, pending, totalValue, avgTicket, approvalRate };
-  }, [allQuoteStats]);
+    return {
+      totalQuotes: quotes.length,
+      totalValue,
+      avgTicket,
+      approvalRate,
+    };
+  }, [quotes]);
 
-  const statusData = React.useMemo(() => [
-    { name: 'Finalizados', value: stats.approved },
-    { name: 'Em Aberto', value: stats.pending },
-  ], [stats.approved, stats.pending]);
+  const statusData = React.useMemo(() => {
+    const counts: Record<string, number> = {};
+    quotes.forEach(q => {
+      counts[q.status] = (counts[q.status] || 0) + 1;
+    });
+
+    const statusLabels: Record<string, string> = {
+      received: 'Recebidos',
+      analyzing: 'Em Análise',
+      negotiating: 'Negociando',
+      awaiting_approval: 'Aguardando',
+      executing: 'Execução',
+      finished: 'Finalizados',
+    };
+
+    return Object.entries(counts).map(([status, count]) => ({
+      name: statusLabels[status] || status,
+      value: count,
+    }));
+  }, [quotes]);
 
   const stuckQuotes = React.useMemo(() => {
-    // Note: We don't have enough data in allQuoteStats for stuck check.
-    // For simplicity, we only check stuck quotes among the recent ones fetched.
-    return recentQuotes.filter(q => {
-      if (q.status !== 'negotiating') return false;
-      const lastUpdate = q.updatedAt ? new Date(q.updatedAt) : new Date(q.createdAt);
-      const hoursStuck = (new Date().getTime() - lastUpdate.getTime()) / (1000 * 60 * 60);
-      return hoursStuck > 24;
-    });
-  }, [recentQuotes]);
+    const threshold = new Date();
+    threshold.setDate(threshold.getDate() - 3);
+
+    return quotes
+      .filter(q => 
+        q.status !== 'finished' && 
+        new Date(q.updatedAt || q.createdAt) < threshold
+      )
+      .slice(0, 5);
+  }, [quotes]);
+
+  const recentQuotes = React.useMemo(() => quotes.slice(0, 5), [quotes]);
+
+  const revenueByType = React.useMemo(() => {
+    const totals: Record<string, number> = {};
+    
+    // Consideramos todos os orçamentos para alinhar com o KPI "Total em Propostas"
+    for (const quote of quotes) {
+      if (!quote.grandTotal || quote.grandTotal === 0) continue;
+
+      const quoteItems = quote.items ?? [];
+      const itemsSubtotalRaw = quoteItems.reduce((acc, item) => acc + (item.total ?? 0), 0);
+      
+      if (itemsSubtotalRaw === 0) {
+        // Se não há itens detalhados, mas o orçamento tem valor, consideramos como 'product' para evitar categorias inexistentes
+        totals['product'] = (totals['product'] ?? 0) + quote.grandTotal;
+        continue;
+      }
+
+      const discountFactor = quote.grandTotal / itemsSubtotalRaw;
+
+      for (const item of quoteItems) {
+        // Default to 'product' if type is missing, as most manual items are products
+        const itemType = item.type || 'product';
+        const itemValue = (item.total ?? 0) * discountFactor;
+        totals[itemType] = (totals[itemType] ?? 0) + itemValue;
+      }
+    }
+
+    const TYPE_LABELS: Record<string, string> = {
+      service: 'Serviços',
+      product: 'Produtos',
+      labor:   'Mão de obra',
+      package: 'Pacotes',
+      others:  'Não categorizados',
+    };
+
+    return Object.entries(totals)
+      .map(([type, total]) => ({
+        type,
+        label: TYPE_LABELS[type] ?? (type === 'others' ? 'Não categorizados' : type),
+        total,
+      }))
+      .filter(item => item.total > 0)
+      .sort((a, b) => b.total - a.total);
+  }, [quotes]);
 
   if (loading) {
     return (
-      <div className="flex h-64 items-center justify-center">
+      <div className="flex h-96 items-center justify-center">
         <div className="h-8 w-8 animate-spin rounded-full border-4 border-[#111827] border-t-transparent"></div>
       </div>
     );
@@ -88,87 +166,133 @@ export const Dashboard: React.FC = () => {
   return (
     <div className="space-y-8">
       {/* Alerts Section */}
-      {stuckQuotes.length > 0 && (
+      {stuckQuotes.length > 0 && !isCustomer && (
         <motion.div
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="rounded-2xl border border-[#FEF2F2] bg-[#FEF2F2] p-4 text-[#991B1B]"
+          className="rounded-2xl border border-red-100 bg-red-50 p-4"
         >
-          <div className="flex items-center gap-3">
-            <AlertCircle className="h-5 w-5" />
+          <div className="flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-red-500" />
             <div className="flex-1">
-              <p className="text-sm font-bold">Atenção: {stuckQuotes.length} orçamentos parados em 'Tratativa' por mais de 24h.</p>
-              <p className="text-xs opacity-80">Estes orçamentos requerem atenção imediata para não perder a venda.</p>
+              <h3 className="text-sm font-bold text-red-800">Atenção: Orçamentos sem movimentação</h3>
+              <p className="mt-1 text-sm text-red-700">Há {stuckQuotes.length} orçamentos parados há mais de 3 dias que precisam de atenção.</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {stuckQuotes.map(q => (
+                  <button
+                    key={q.id}
+                    onClick={() => navigate(`/quotes/${q.id}`)}
+                    className="rounded-lg bg-white px-3 py-1.5 text-xs font-bold text-red-600 shadow-sm transition-all hover:bg-red-100 active:scale-95"
+                  >
+                    {q.quoteNumber} - {q.customerName}
+                  </button>
+                ))}
+              </div>
             </div>
-            <button className="rounded-lg bg-white px-3 py-1 text-xs font-bold shadow-sm hover:bg-gray-50">
-              Ver Orçamentos
-            </button>
           </div>
         </motion.div>
       )}
 
-      {/* Stats Grid */}
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
-          title="Receita Projetada"
+          title="Total em Propostas"
           value={formatCurrency(stats.totalValue)}
           icon={TrendingUp}
-          trend="+12.5%"
+          trend="+12%"
           trendUp={true}
           color="black"
         />
         <StatCard
-          title="Orçamentos Totais"
-          value={stats.total.toString()}
+          title="Ticket Médio"
+          value={formatCurrency(stats.avgTicket)}
           icon={FileText}
-          trend="+5.2%"
+          trend="+5%"
           trendUp={true}
           color="blue"
         />
         <StatCard
           title="Taxa de Aprovação"
-          value={`${stats.approvalRate.toFixed(1)}%`}
+          value={`${Math.round(stats.approvalRate)}%`}
           icon={CheckCircle}
-          trend="-2.1%"
+          trend="-2%"
           trendUp={false}
           color="blue"
         />
         <StatCard
-          title="Ticket Médio"
-          value={formatCurrency(stats.avgTicket)}
-          icon={Users}
-          trend="+8.4%"
+          title="Orçamentos Totais"
+          value={stats.totalQuotes.toString()}
+          icon={FileText}
+          trend="+18%"
           trendUp={true}
           color="black"
         />
       </div>
 
+      {!isCustomer && (
+        <section className="space-y-4">
+          <h2 className="text-lg font-bold text-[#111827]">Acesso Rápido</h2>
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <QuickActionCard
+              title="Novo Orçamento"
+              icon={Plus}
+              onClick={() => navigate('/quotes/new')}
+              color="black"
+            />
+            <QuickActionCard
+              title="Novo Cliente"
+              icon={UserPlus}
+              onClick={() => navigate('/customers')}
+              color="blue"
+            />
+            <QuickActionCard
+              title="Novo Item"
+              icon={Package}
+              onClick={() => navigate('/items')}
+              color="blue"
+            />
+            {(isAdmin || isManager) && (
+              <QuickActionCard
+                title="Configurações"
+                icon={Settings}
+                onClick={() => navigate('/settings')}
+                color="black"
+              />
+            )}
+          </div>
+        </section>
+      )}
+
+      {!isCustomer && revenueByType.length > 0 && (
+        <RevenueByTypeCard data={revenueByType} />
+      )}
+
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-3">
         {/* Main Chart */}
         <div className="lg:col-span-2 rounded-2xl border border-[#E5E7EB] bg-white p-6 shadow-sm">
           <div className="mb-6 flex items-center justify-between">
-            <h2 className="text-lg font-bold text-[#111827]">Desempenho de Vendas</h2>
-            <select className="rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] px-3 py-1.5 text-sm focus:outline-none">
-              <option>Últimos 7 dias</option>
-              <option>Últimos 30 dias</option>
-              <option>Este ano</option>
-            </select>
+            <h2 className="font-bold text-[#111827]">Volume de Orçamentos</h2>
+            <button className="text-xs font-bold uppercase tracking-wider text-[#6B7280] hover:text-[#111827]">Últimos 30 dias</button>
           </div>
-          <div className="w-full min-w-0" style={{ height: 320, minHeight: 320 }}>
+          <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={statusData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F3F4F6" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#6B7280', fontSize: 12 }} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#6B7280', fontSize: 12 }} />
-                <Tooltip
-                  cursor={{ fill: '#F9FAFB' }}
-                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)' }}
+                <XAxis 
+                  dataKey="name" 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{ fill: '#6B7280', fontSize: 12 }} 
                 />
-                <Bar dataKey="value" radius={[6, 6, 0, 0]} barSize={40}>
-                  {statusData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Bar>
+                <YAxis 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{ fill: '#6B7280', fontSize: 12 }} 
+                />
+                <Tooltip 
+                  cursor={{ fill: '#F9FAFB' }}
+                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                />
+                <Bar dataKey="value" fill="#111827" radius={[4, 4, 0, 0]} barSize={40} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -176,8 +300,10 @@ export const Dashboard: React.FC = () => {
 
         {/* Status Distribution */}
         <div className="rounded-2xl border border-[#E5E7EB] bg-white p-6 shadow-sm">
-          <h2 className="mb-6 text-lg font-bold text-[#111827]">Distribuição de Status</h2>
-          <div className="w-full min-w-0" style={{ height: 256, minHeight: 256 }}>
+          <div className="mb-6">
+            <h2 className="font-bold text-[#111827]">Status dos Orçamentos</h2>
+          </div>
+          <div className="h-[250px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -199,63 +325,80 @@ export const Dashboard: React.FC = () => {
           </div>
           <div className="mt-4 space-y-2">
             {statusData.map((item, index) => (
-              <div key={item.name} className="flex items-center justify-between text-sm">
+              <div key={item.name} className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <div className="h-3 w-3 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }}></div>
-                  <span className="text-[#4B5563]">{item.name}</span>
+                  <span className="text-xs text-[#6B7280]">{item.name}</span>
                 </div>
-                <span className="font-medium text-[#111827]">{item.value}</span>
+                <span className="text-xs font-bold text-[#111827]">{item.value}</span>
               </div>
             ))}
           </div>
         </div>
-      </div>
 
-      {/* Recent Activity */}
-      <div className="rounded-2xl border border-[#E5E7EB] bg-white p-6 shadow-sm">
-        <div className="mb-6 flex items-center justify-between">
-          <h2 className="text-lg font-bold text-[#111827]">Orçamentos Recentes</h2>
-          <button className="text-sm font-medium text-[#111827] hover:underline">Ver todos</button>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="border-b border-[#F3F4F6] text-xs font-semibold uppercase tracking-wider text-[#9CA3AF]">
-                <th className="pb-4 pl-2">Número</th>
-                <th className="pb-4">Cliente</th>
-                <th className="pb-4">Data</th>
-                <th className="pb-4">Valor</th>
-                <th className="pb-4">Status</th>
-                <th className="pb-4 pr-2 text-right">Ação</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#F3F4F6]">
-              {recentQuotes.map((quote) => (
-                <tr key={quote.id} className="group hover:bg-[#F9FAFB] transition-colors">
-                  <td className="py-4 pl-2 font-medium text-[#111827]">{quote.quoteNumber}</td>
-                  <td className="py-4 text-[#4B5563]">{quote.customerName}</td>
-                  <td className="py-4 text-[#6B7280] text-sm">{formatDateTime(quote.createdAt)}</td>
-                  <td className="py-4 font-semibold text-[#111827]">{formatCurrency(quote.grandTotal)}</td>
-                  <td className="py-4">
-                    <StatusBadge status={quote.status} />
-                  </td>
-                  <td className="py-4 pr-2 text-right">
-                    <button className="rounded-lg p-2 text-[#6B7280] hover:bg-[#F3F4F6] hover:text-[#111827]">
-                      <ArrowUpRight className="h-4 w-4" />
-                    </button>
-                  </td>
+        {/* Recent Quotes */}
+        <div className="lg:col-span-3 rounded-2xl border border-[#E5E7EB] bg-white overflow-hidden shadow-sm">
+          <div className="flex items-center justify-between p-6 bg-[#F9FAFB] border-b border-[#E5E7EB]">
+            <h2 className="font-bold text-[#111827]">Orçamentos Recentes</h2>
+            <button onClick={() => navigate('/quotes')} className="flex items-center gap-1 text-xs font-bold uppercase tracking-wider text-[#6B7280] hover:text-[#111827]">
+              Ver todos <ArrowUpRight className="h-3 w-3" />
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="text-[10px] uppercase tracking-wider text-[#9CA3AF] border-b border-[#F3F4F6]">
+                  <th className="px-6 py-4 font-bold">Número</th>
+                  <th className="px-6 py-4 font-bold">Cliente</th>
+                  <th className="px-6 py-4 font-bold">Status</th>
+                  <th className="px-6 py-4 font-bold">Total</th>
+                  <th className="px-6 py-4 font-bold text-right">Data</th>
                 </tr>
-              ))}
-              {recentQuotes.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="py-8 text-center text-[#9CA3AF]">Nenhum orçamento encontrado.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-[#F3F4F6]">
+                {recentQuotes.map((quote) => (
+                  <tr 
+                    key={quote.id} 
+                    onClick={() => navigate(`/quotes/${quote.id}`)}
+                    className="group cursor-pointer hover:bg-[#F9FAFB] transition-colors"
+                  >
+                    <td className="px-6 py-4 text-sm font-bold text-[#111827] group-hover:text-black">{quote.quoteNumber}</td>
+                    <td className="px-6 py-4 text-sm text-[#6B7280]">{quote.customerName}</td>
+                    <td className="px-6 py-4">
+                      <StatusBadge status={quote.status} />
+                    </td>
+                    <td className="px-6 py-4 text-sm font-bold text-[#111827]">{formatCurrency(quote.grandTotal || 0)}</td>
+                    <td className="px-6 py-4 text-right text-xs text-[#6B7280] font-medium">{formatDateTime(quote.createdAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>
+  );
+};
+
+const QuickActionCard: React.FC<{ title: string; icon: any; onClick: () => void; color: 'black' | 'blue' }> = ({ title, icon: Icon, onClick, color }) => {
+  const colorClasses = {
+    black: "bg-[#111827] text-white hover:bg-black",
+    blue: "bg-martins-blue text-[#111827] hover:bg-[#A0D0D6]",
+  };
+
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "flex flex-col items-center justify-center gap-3 rounded-2xl p-6 shadow-sm transition-all active:scale-95 group",
+        colorClasses[color]
+      )}
+    >
+      <div className="rounded-xl bg-white/10 p-2 group-hover:scale-110 transition-transform">
+        <Icon className="h-6 w-6" />
+      </div>
+      <span className="text-sm font-bold">{title}</span>
+    </button>
   );
 };
 
@@ -268,50 +411,126 @@ const StatCard: React.FC<{ title: string; value: string; icon: any; trend: strin
   return (
     <motion.div
       whileHover={{ y: -4 }}
-      className="rounded-2xl border border-[#E5E7EB] bg-white p-6 shadow-sm transition-all hover:shadow-md"
+      className={cn("rounded-2xl p-6 shadow-sm border border-transparent transition-all", colorClasses[color])}
     >
       <div className="flex items-center justify-between">
-        <div className={cn("rounded-xl p-3", colorClasses[color])}>
+        <div className="rounded-xl bg-white/20 p-2">
           <Icon className="h-6 w-6" />
         </div>
-        <div className={cn("flex items-center gap-1 text-xs font-medium", trendUp ? "text-[#10B981]" : "text-[#EF4444]")}>
+        <div className={cn(
+          "flex items-center gap-1 text-xs font-bold rounded-lg px-2 py-1",
+          trendUp ? "bg-green-500/20 text-green-300" : "bg-red-500/20 text-red-300"
+        )}>
           {trendUp ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
           {trend}
         </div>
       </div>
       <div className="mt-4">
-        <p className="text-sm font-medium text-[#6B7280]">{title}</p>
-        <h3 className="mt-1 text-2xl font-bold text-[#111827]">{value}</h3>
+        <h3 className="text-xs font-medium opacity-80">{title}</h3>
+        <p className="mt-1 text-2xl font-black">{value}</p>
       </div>
     </motion.div>
   );
 };
 
-const StatusBadge: React.FC<{ status: QuoteStatus }> = ({ status }) => {
-  const config: Record<string, { label: string; classes: string; icon: any }> = {
-    received: { label: 'Recebido', classes: 'bg-gray-100 text-gray-700', icon: Clock },
-    analyzing: { label: 'Em Análise', classes: 'bg-martins-blue text-[#111827]', icon: AlertCircle },
-    negotiating: { label: 'Em Tratativa', classes: 'bg-indigo-100 text-indigo-700', icon: FileText },
-    awaiting_approval: { label: 'Aguardando Aprovação', classes: 'bg-purple-100 text-purple-700', icon: Users },
-    executing: { label: 'Execução', classes: 'bg-emerald-100 text-emerald-700', icon: CheckCircle },
-    finished: { label: 'Finalizado', classes: 'bg-amber-100 text-amber-700', icon: TrendingUp },
-    // Fallbacks for old status values
-    draft: { label: 'Rascunho', classes: 'bg-gray-100 text-gray-700', icon: Clock },
-    review: { label: 'Revisão', classes: 'bg-martins-blue text-[#111827]', icon: AlertCircle },
-    sent: { label: 'Enviado', classes: 'bg-indigo-100 text-indigo-700', icon: FileText },
-    viewed: { label: 'Visualizado', classes: 'bg-purple-100 text-purple-700', icon: Users },
-    approved: { label: 'Aprovado', classes: 'bg-emerald-100 text-emerald-700', icon: CheckCircle },
-    rejected: { label: 'Rejeitado', classes: 'bg-rose-100 text-rose-700', icon: X },
-    converted: { label: 'Convertido', classes: 'bg-amber-100 text-amber-700', icon: TrendingUp },
+const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
+  const styles: Record<string, string> = {
+    received: 'bg-[#F9FAFB] text-[#6B7280]',
+    analyzing: 'bg-[#B0E0E6]/20 text-[#0E7490]',
+    negotiating: 'bg-yellow-50 text-yellow-700',
+    awaiting_approval: 'bg-orange-50 text-orange-700',
+    executing: 'bg-[#111827] text-white',
+    finished: 'bg-green-50 text-green-700',
   };
 
-  const badgeConfig = config[status] || { label: status, classes: 'bg-gray-100 text-gray-700', icon: Clock };
-  const { label, classes, icon: Icon } = badgeConfig;
+  const labels: Record<string, string> = {
+    received: 'Recebido',
+    analyzing: 'Em Análise',
+    negotiating: 'Negociação',
+    awaiting_approval: 'Aguardando',
+    executing: 'Execução',
+    finished: 'Finalizado',
+  };
 
   return (
-    <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold", classes)}>
-      <Icon className="h-3 w-3" />
-      {label}
+    <span className={cn(
+      "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider",
+      styles[status] || styles.received
+    )}>
+      {labels[status] || status}
     </span>
+  );
+};
+
+const TYPE_COLORS: Record<string, { bar: string; bg: string; text: string }> = {
+  service: { bar: 'bg-[#D3D1C7]', bg: 'bg-[#F3F2EF]', text: 'text-[#2C2C2A]' },
+  product: { bar: 'bg-[#B5D4F4]', bg: 'bg-[#EBF4FE]', text: 'text-[#042C53]' },
+  labor:   { bar: 'bg-[#C0DD97]', bg: 'bg-[#EAF3DE]', text: 'text-[#173404]' },
+  package: { bar: 'bg-[#FAC775]', bg: 'bg-[#FAEEDA]', text: 'text-[#412402]' },
+};
+
+const RevenueByTypeCard: React.FC<{
+  data: { type: string; label: string; total: number }[];
+}> = ({ data }) => {
+  const maxTotal = data[0]?.total ?? 1;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="rounded-2xl border border-[#E5E7EB] bg-white p-6 shadow-sm"
+    >
+      <div className="mb-5 flex items-center justify-between">
+        <h2 className="text-lg font-bold text-[#111827]">
+          Receita projetada por tipo de item
+        </h2>
+        <span className="rounded-lg bg-[#F3F4F6] px-2.5 py-1 text-xs text-[#6B7280]">
+          {data.length} {data.length === 1 ? 'tipo em uso' : 'tipos em uso'}
+        </span>
+      </div>
+
+      {/* Mini KPIs por tipo */}
+      <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {data.map(({ type, label, total }) => {
+          const colors = TYPE_COLORS[type] ?? { bg: 'bg-[#F9FAFB]', text: 'text-[#111827]', bar: 'bg-[#E5E7EB]' };
+          return (
+            <div key={type} className={cn('rounded-xl p-3', colors.bg)}>
+              <p className={cn('text-xs', colors.text)}>{label}</p>
+              <p className={cn('mt-1 text-sm font-semibold', colors.text)}>
+                {formatCurrency(total)}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Barras horizontais proporcionais */}
+      <div className="space-y-3">
+        {data.map(({ type, label, total }) => {
+          const pct = Math.max(4, Math.round((total / maxTotal) * 100));
+          const colors = TYPE_COLORS[type] ?? { bar: 'bg-[#E5E7EB]', bg: 'bg-[#F9FAFB]', text: 'text-[#111827]' };
+          return (
+            <div key={type} className="flex items-center gap-3">
+              <span className="w-24 shrink-0 text-right text-xs text-[#6B7280]">
+                {label}
+              </span>
+              <div className="relative h-5 flex-1 overflow-hidden rounded-md bg-[#F3F4F6]">
+                <div
+                  className={cn(
+                    'flex h-full items-center justify-end rounded-md pr-2 transition-all duration-500',
+                    colors.bar
+                  )}
+                  style={{ width: `${pct}%` }}
+                >
+                  <span className="text-[11px] font-medium">
+                    {formatCurrency(total)}
+                  </span>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </motion.div>
   );
 };

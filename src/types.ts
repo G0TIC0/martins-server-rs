@@ -75,6 +75,7 @@ export interface QuoteItem {
   name: string;
   ncm?: string;
   type: ItemType;
+  unit?: string;
   quantity: number;
   costPrice: number;
   unitPrice: number;
@@ -115,6 +116,17 @@ export interface Quote {
   approvedAt?: string;
   approvedBy?: string;
   photos?: QuotePhoto[];
+}
+
+export interface ParsedQuote {
+  customer: string;
+  items: {
+    name: string;
+    quantity: number;
+    price: number;
+  }[];
+  discounts: number;
+  observations: string;
 }
 
 export interface CompanySettings {

@@ -85,6 +85,7 @@ export function mapQuoteItem(i: any): QuoteItem {
     name: i.name,
     ncm: i.ncm,
     type: i.type as ItemType,
+    unit: i.unit || 'un',
     quantity: Number(i.quantity),
     costPrice: Number(i.cost_price),
     unitPrice: Number(i.unit_price),
@@ -145,14 +146,6 @@ export function mapNcm(n: any): Ncm {
     description: n.description,
     updatedAt: n.updated_at,
   };
-}
-
-export function debounce<T extends (...args: any[]) => any>(fn: T, ms: number): T {
-  let timer: ReturnType<typeof setTimeout>;
-  return ((...args: any[]) => {
-    clearTimeout(timer);
-    timer = setTimeout(() => fn(...args), ms);
-  }) as T;
 }
 
 export function mapProfile(p: any): UserProfile {

@@ -1,4 +1,3 @@
-// OTIMIZAÇÕES APLICADAS: #4 (SupabaseContext)
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { withRetry } from '../lib/supabase-retry';
@@ -113,12 +112,9 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
     if (!supabaseUrl || !supabaseAnonKey) {
-      if (!isDemoMode) {
-        setError('Configuração do Supabase ausente. Verifique as variáveis de ambiente VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no painel de Segredos.');
-        setLoading(false);
-        return;
-      }
-      console.log('[SupabaseContext] Environment variables missing, but continuing in Demo Mode.');
+      setError('Configuração do Supabase ausente. Verifique as variáveis de ambiente VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no painel de Segredos.');
+      setLoading(false);
+      return;
     }
 
     const initializeAuth = async () => {
@@ -146,7 +142,7 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           const currentUser = session?.user ?? null;
           
           try {
-            if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
+            if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
               if (currentUser?.id !== userRef.current?.id || (!profileRef.current && currentUser)) {
                 userRef.current = currentUser;
                 setUser(currentUser);
@@ -155,12 +151,6 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                   profileRef.current = userProfile;
                   setProfile(userProfile);
                 }
-              }
-            } else if (event === 'TOKEN_REFRESHED') {
-              // Apenas atualiza o user object (token novo), sem rebuscar perfil do banco
-              if (currentUser) {
-                userRef.current = currentUser;
-                setUser(currentUser);
               }
             } else if (event === 'SIGNED_OUT') {
               userRef.current = null;
@@ -191,10 +181,10 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     // Safety timeout to ensure loading is cleared eventually
     const timeoutId = setTimeout(() => {
       if (loading) {
-        console.error('[SupabaseContext] Timeout de inicialização (8s). Verifique a conectividade com o Supabase.');
+        console.warn('[SupabaseContext] Safety timeout triggered. Current user:', userRef.current?.id, 'Profile:', !!profileRef.current);
         setLoading(false);
       }
-    }, 8000);
+    }, 15000);
 
     return () => {
       if (authSubscription) {
@@ -257,7 +247,7 @@ export const SupabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
 
     const role = profile?.role;
-    const isAdmin = role === 'admin' || user?.email === 'mig7mor@gmail.com';
+    const isAdmin = role === 'admin';
     const isManager = role === 'manager' || isAdmin;
     const isSales = role === 'sales' || isManager;
     const isFinance = role === 'finance' || isManager;

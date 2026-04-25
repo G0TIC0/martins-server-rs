@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS quote_items (
   name TEXT NOT NULL,
   ncm TEXT,
   type TEXT NOT NULL,
+  unit TEXT DEFAULT 'un',
   quantity DECIMAL(12, 3) DEFAULT 1,
   cost_price DECIMAL(12, 2) DEFAULT 0,
   unit_price DECIMAL(12, 2) DEFAULT 0,

@@ -1,71 +1,71 @@
-// OTIMIZAÇÕES APLICADAS: #3 (retry backoff)
 import { PostgrestError } from '@supabase/supabase-js';
-
-const isLockError = (msg: string) =>
-  msg.includes('stole it') || msg.includes('lock');
-
-function backoffDelay(attempt: number, baseMs = 300): Promise<void> {
-  // Exponential backoff: 300ms, 600ms, 1200ms + jitter aleatório de até 200ms
-  const delay = Math.min(baseMs * Math.pow(2, attempt) + Math.random() * 200, 3000);
-  return new Promise(resolve => setTimeout(resolve, delay));
-}
 
 export async function withRetry<T>(
   operation: () => Promise<{ data: T | null; error: PostgrestError | null }>,
   maxRetries = 3,
-  baseDelayMs = 300
+  delay = 500
 ): Promise<{ data: T | null; error: PostgrestError | null }> {
   let lastError: any = null;
-
+  
   for (let i = 0; i < maxRetries; i++) {
     try {
       const result = await operation();
+      
+      // If there's an error, check if it's the "stolen lock" error
       if (result.error) {
-        const msg = result.error.message || '';
-        if (isLockError(msg)) {
-          console.warn(`[Supabase Retry] Lock error, tentativa ${i + 1}/${maxRetries}`);
-          await backoffDelay(i, baseDelayMs);
+        const errorMessage = result.error.message || '';
+        if (errorMessage.includes('stole it') || errorMessage.includes('lock')) {
+          console.warn(`[Supabase Retry] Lock error detected, retrying (${i + 1}/${maxRetries})...`);
+          await new Promise(resolve => setTimeout(resolve, delay * (i + 1)));
           continue;
         }
         return result;
       }
+      
       return result;
     } catch (err: any) {
       lastError = err;
-      const msg = err.message || '';
-      if (isLockError(msg)) {
-        console.warn(`[Supabase Retry] Lock error capturado, tentativa ${i + 1}/${maxRetries}`);
-        await backoffDelay(i, baseDelayMs);
+      const errorMessage = err.message || '';
+      
+      if (errorMessage.includes('stole it') || errorMessage.includes('lock')) {
+        console.warn(`[Supabase Retry] Caught lock error, retrying (${i + 1}/${maxRetries})...`);
+        await new Promise(resolve => setTimeout(resolve, delay * (i + 1)));
         continue;
       }
+      
       throw err;
     }
   }
-
+  
   return { data: null, error: lastError };
 }
 
+/**
+ * Specialized retry for simple promises (non-postgrest)
+ */
 export async function withRetryPromise<T>(
   operation: () => Promise<T>,
   maxRetries = 3,
-  baseDelayMs = 300
+  delay = 500
 ): Promise<T> {
   let lastError: any = null;
-
+  
   for (let i = 0; i < maxRetries; i++) {
     try {
       return await operation();
     } catch (err: any) {
       lastError = err;
-      const msg = err.message || '';
-      if (isLockError(msg)) {
-        console.warn(`[Supabase Retry] Promise lock error, tentativa ${i + 1}/${maxRetries}`);
-        await backoffDelay(i, baseDelayMs);
+      const errorMessage = err.message || '';
+      
+      if (errorMessage.includes('stole it') || errorMessage.includes('lock')) {
+        console.warn(`[Supabase Retry] Caught lock error in promise, retrying (${i + 1}/${maxRetries})...`);
+        await new Promise(resolve => setTimeout(resolve, delay * (i + 1)));
         continue;
       }
+      
       throw err;
     }
   }
-
+  
   throw lastError;
 }

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Users, Package, FileText, Settings, LogOut, Menu, X, Bell, Search, User as UserIcon, Disc } from 'lucide-react';
+import { LayoutDashboard, Users, Package, FileText, Settings, LogOut, Menu, X, Bell, Search, User as UserIcon, Disc, ChevronUp } from 'lucide-react';
 import { useSupabase } from '../context/SupabaseContext';
 import { useDemo } from '../context/DemoContext';
 import { DemoTimer } from './DemoTimer';
@@ -19,13 +19,39 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   const { profile, logout, isSales, isManager, isAdmin, isTechnician, isCustomer } = useSupabase();
   const { isDemoMode } = useDemo();
   const location = useLocation();
+  const contentRef = React.useRef<HTMLDivElement>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = React.useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false);
+  const [showScrollTop, setShowScrollTop] = React.useState(false);
 
   // Close mobile menu on route change
   React.useEffect(() => {
     setIsMobileMenuOpen(false);
+    contentRef.current?.scrollTo(0, 0);
   }, [location.pathname]);
+
+  React.useEffect(() => {
+    const handleScroll = () => {
+      if (contentRef.current) {
+        setShowScrollTop(contentRef.current.scrollTop > 400);
+      }
+    };
+
+    const container = contentRef.current;
+    if (container) {
+      container.addEventListener('scroll', handleScroll);
+    }
+
+    return () => {
+      if (container) {
+        container.removeEventListener('scroll', handleScroll);
+      }
+    };
+  }, []);
+
+  const scrollToTop = () => {
+    contentRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   const filteredNavItems = React.useMemo(() => {
     const checkRole = (itemRole: string) => {
@@ -201,7 +227,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         </header>
 
         {/* Page Content */}
-        <div className="flex-1 overflow-y-auto p-4 md:p-8">
+        <div ref={contentRef} className="flex-1 overflow-y-auto p-4 md:p-8">
           <AnimatePresence mode="wait">
             <motion.div
               key={location.pathname}
@@ -216,7 +242,22 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         </div>
       </main>
 
-      <DemoTimer />
+        <AnimatePresence>
+          {showScrollTop && (
+            <motion.button
+              initial={{ opacity: 0, scale: 0.5 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.5 }}
+              onClick={scrollToTop}
+              className="fixed bottom-8 right-8 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-[#111827] text-white shadow-2xl shadow-black/20 hover:bg-black active:scale-95"
+              title="Voltar ao topo"
+            >
+              <ChevronUp className="h-6 w-6" />
+            </motion.button>
+          )}
+        </AnimatePresence>
+
+        <DemoTimer />
     </div>
   );
 };

@@ -7,3 +7,29 @@
   --animate-spin-slow: spin 3s linear infinite;
 }
 
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #E5E7EB transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: #E5E7EB;
+    border-radius: 20px;
+    border: 3px solid transparent;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: #D1D5DB;
+  }
+}
+
